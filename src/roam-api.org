@@ -532,10 +532,11 @@ update (which would mean it isn't a well-formed roam file)."
 * Mutate: replace the body of a node
 
 Replace the paragraphs and other body elements that come before
-the first heading with new content. Property drawers, =#+=
-keywords (=#+title:=, =#+filetags:=) and every existing heading
-with its content stay as they are. To change a heading, edit it
-by hand.
+the first heading with new content. Property drawers, standalone
+=#+= keywords (=#+title:=, =#+filetags:=) and every existing
+heading with its content stay as they are. Affiliated keywords
+(=#+name:=, =#+caption:=) belong to the element below them and are
+removed with it. To change a heading, edit it by hand.
 
 Used for trimming / rewriting fleeting captures into atomic
 permanent notes. The minimum viable body-write — surgical
@@ -640,9 +641,10 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
 
 The paragraphs and other body elements before the first heading
 are replaced with NEW-BODY parsed as org prose. Property drawers,
-=#+= keywords (=#+title:=, =#+filetags:=) and every existing
-heading with its content stay. NEW-BODY is a string; empty clears
-those body elements.
+standalone =#+= keywords (=#+title:=, =#+filetags:=) and every
+existing heading with its content stay. Affiliated keywords
+(=#+name:=, =#+caption:=) go with the element they precede.
+NEW-BODY is a string; empty clears those body elements.
 Returns (:id :file). Errors loudly on unknown ID or malformed file."
   (sns-roam--update-section
    id
