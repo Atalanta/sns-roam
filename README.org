@@ -7,6 +7,7 @@ An Emacs Lisp bridge between Claude and an org-roam slipbox.
 - =src/roam-api.org=: read primitives (find by metadata, body search, expand, excerpt) and mutation primitives (set body, append link, replace element, set property or keyword, rename, create node, meeting note).
 - =src/roam-import.org=: an importer from an Obsidian vault.
 - =lisp/=: the tangled Emacs Lisp, which =mise run tangle= generates and git tracks.
+- =skills/=: the =roam-fetch= and =roam-distill= Claude skills.
 - =docs/design/=: design drafts for a generic org-ml editing bridge.
 
 * Working on it
@@ -15,4 +16,4 @@ Edit the org files in =src/=, then run =mise run tangle=. =mise run check= fails
 
 * Status
 
-The history of both org files comes from =~/.emacs.d=. Emacs loads =sns-roam-meeting-note= from this repository on first use, through a =use-package= block in =~/.emacs.d/README.org=. The copies in =~/.emacs.d/sns-emacs-modules= stay in place, and the Claude skills =roam-fetch= and =roam-distill= still load those.
+The history of both org files comes from =~/.emacs.d=. Emacs loads =sns-roam-meeting-note= from this repository on first use, through a =use-package= block in =~/.emacs.d/README.org=. The Claude skills =roam-fetch= and =roam-distill= live in =skills/=, linked from =~/.claude/skills=, and load =lisp/sns-roam-api.el= from here. They load only when the primitives are unbound, so after a fix reload with the skill's load command or restart Emacs. The copies in =~/.emacs.d/sns-emacs-modules= stay in place, unused by the skills.
