@@ -1,0 +1,18 @@
+#+TITLE: sns-roam
+
+An Emacs Lisp bridge between Claude and an org-roam slipbox.
+
+* What is here
+
+- =src/roam-api.org=: read primitives (find by metadata, body search, expand, excerpt) and mutation primitives (set body, append link, replace element, set property or keyword, rename, create node, meeting note).
+- =src/roam-import.org=: an importer from an Obsidian vault.
+- =lisp/=: the tangled Emacs Lisp, which =mise run tangle= generates and git tracks.
+- =docs/design/=: design drafts for a generic org-ml editing bridge.
+
+* Working on it
+
+Edit the org files in =src/=, then run =mise run tangle=. =mise run check= fails if the committed =lisp/= has drifted from its source.
+
+* Status
+
+The history of both org files comes from =~/.emacs.d=. Emacs still loads the copies in =~/.emacs.d/sns-emacs-modules=, and the Claude skills =roam-fetch= and =roam-distill= still point there. Nothing in the running setup has changed yet.

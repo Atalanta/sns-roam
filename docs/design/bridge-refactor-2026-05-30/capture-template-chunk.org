@@ -1,0 +1,34 @@
+#+end_src
+
+**** Capture template
+
+Ahrens-flavoured atomic notes. The title is the *claim*, not the
+topic. =KIND= drives review: =permanent= (your idea, in your own
+words, earns its place), =literature= (somebody else's idea you've
+restated), =fleeting= (rough capture for later distillation).
+=SOURCE= is mandatory for literature notes; left empty otherwise.
+=CREATED= is stamped automatically.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+  (setq org-roam-capture-templates
+        '(("p" "permanent" plain
+           "%?"
+           :target (file+head
+                    "%<%Y%m%d%H%M%S>-${slug}.org"
+                    ":PROPERTIES:\n:ID:       ${id}\n:CREATED:  %U\n:KIND:     permanent\n:END:\n#+title: ${title}\n\n")
+           :unnarrowed t)
+          ("l" "literature" plain
+           "%?"
+           :target (file+head
+                    "%<%Y%m%d%H%M%S>-${slug}.org"
+                    ":PROPERTIES:\n:ID:       ${id}\n:CREATED:  %U\n:KIND:     literature\n:SOURCE:   %^{Source}\n:END:\n#+title: ${title}\n\n")
+           :unnarrowed t)
+          ("f" "fleeting" plain
+           "%?"
+           :target (file+head
+                    "%<%Y%m%d%H%M%S>-${slug}.org"
+                    ":PROPERTIES:\n:ID:       ${id}\n:CREATED:  %U\n:KIND:     fleeting\n:END:\n#+title: ${title}\n\n")
+           :unnarrowed t)))
+
+  (provide 'sns-knowledge-base)
+#+end_src

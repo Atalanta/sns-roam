@@ -1,0 +1,164 @@
+** Bridge primitives
+
+The agent-facing surface for editing Org files. The discipline is:
+the agent describes /what/ to edit using a small spec language
+(=:headline-path=, =:src-block-tangle=, …) and supplies a transform
+(typically built from =org-ml-build-*= and =org-ml-set-*=). It never
+mentions byte offsets, never writes raw =org-ml-match= patterns, and
+never builds the parse-and-write boilerplate.
+
+Built on top of [[https://github.com/ndwarshuis/org-ml][org-ml]]: this
+module is a thin discipline layer, not a re-implementation. Org-ml
+provides the AST builders, setters, the match pattern language, and
+=org-ml-update-this-buffer= (parse → transform → diff-write). What
+this module adds:
+
+- A spec language so handles read as domain language ("the src-block
+  tangling to X"), not as match patterns.
+- Loud failure on non-unique matches. =org-ml-match-*= silently
+  applies to /every/ match; that's a footgun for an agent. Every
+  mutation here asserts exactly-one-match before applying.
+- A small set of named verbs (=insert-before=, =insert-after=,
+  =replace=, =update-node=) that compose with the spec language.
+- A driver (=sns-update=) that hides the open-buffer / save-buffer
+  boilerplate.
+
+*** Spec language
+
+A spec is a list whose head names the kind of handle and whose tail
+gives the parameters. Supported shapes:
+
+| Spec form                          | Matches                                 |
+|------------------------------------+-----------------------------------------|
+| =(:headline-path PATH)=            | the headline whose outline path equals PATH (a list of titles) |
+| =(:src-block-tangle FILE)=         | the src-block tangling to FILE                               |
+| =(:src-block-name NAME)=           | the src-block with =#+name: NAME=                            |
+| =(:element-id ID)=                 | the element whose drawer =:ID:= property equals ID           |
+
+Each spec is compiled into an =org-ml-match= pattern of the form
+=(:any * (:and TYPE (:pred sns--spec-predicate)))=. The predicate
+consults a dynamically bound spec, so we don't need a top-level
+helper per query.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defvar sns--current-spec nil
+    "Dynamically bound spec consulted by `sns--spec-predicate' during a match.")
+
+  (defun sns--spec-type (spec)
+    "Return the org-element type implied by SPEC's head."
+    (pcase (car spec)
+      (:headline-path 'headline)
+      ((or :src-block-tangle :src-block-name) 'src-block)
+      (:element-id t)
+      (other (error "sns: unknown spec head %S" other))))
+
+  (defun sns--match-spec (node spec)
+    "Return non-nil if NODE satisfies SPEC."
+    (pcase spec
+      (`(:headline-path ,path)
+       (and (eq (org-element-type node) 'headline)
+            (equal (org-ml-headline-get-path node) path)))
+      (`(:src-block-tangle ,file)
+       (and (eq (org-element-type node) 'src-block)
+            (let ((params (org-element-property :parameters node)))
+              (and params
+                   (string-match-p (concat ":tangle[ \t]+\"" (regexp-quote file) "\"")
+                                   params)))))
+      (`(:src-block-name ,name)
+       (and (eq (org-element-type node) 'src-block)
+            (equal (org-element-property :name node) name)))
+      (`(:element-id ,id)
+       (equal (org-element-property :ID node) id))
+      (other (error "sns: unrecognised spec %S" other))))
+
+  (defun sns--spec-predicate (node)
+    "Predicate referenced by compiled patterns; consults `sns--current-spec'."
+    (sns--match-spec node sns--current-spec))
+
+  (defun sns--compile-spec (spec)
+    "Return the org-ml-match pattern for SPEC."
+    `(:any * (:and ,(sns--spec-type spec) (:pred sns--spec-predicate))))
+
+  (defun sns--match-spec-in-tree (spec tree)
+    "Return all nodes in TREE matching SPEC."
+    (let ((sns--current-spec spec))
+      (org-ml-match (sns--compile-spec spec) tree)))
+#+end_src
+
+*** Find the unique node matching a spec
+
+Loud failure on zero or multiple matches. WHAT is an optional label
+used in error messages.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-find-the (tree spec &optional what)
+    "Return the unique node in TREE matching SPEC.
+  Error on zero or >1 matches."
+    (let* ((matches (sns--match-spec-in-tree spec tree))
+           (n (length matches))
+           (label (or what (format "node matching %S" spec))))
+      (cond
+       ((= n 0) (error "Expected one %s; found 0" label))
+       ((> n 1) (error "Expected one %s; found %d (positions: %s)"
+                       label n
+                       (mapcar (lambda (n) (org-element-property :begin n)) matches)))
+       (t (car matches)))))
+#+end_src
+
+*** Mutation verbs
+
+Each verb takes a spec, the new node (or a transform), and the parsed
+tree. It asserts the spec matches exactly one node, applies the
+mutation, and returns the modified tree. The tree is what
+=org-ml-update-this-buffer= consumes.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns--assert-unique-match (spec tree)
+    "Error if SPEC does not match exactly one node in TREE."
+    (let ((n (length (sns--match-spec-in-tree spec tree))))
+      (unless (= n 1)
+        (error "sns: expected one node matching %S; found %d" spec n))))
+
+  (defun sns-insert-before (spec new-node tree)
+    "Insert NEW-NODE before the unique node matching SPEC in TREE."
+    (sns--assert-unique-match spec tree)
+    (let ((sns--current-spec spec))
+      (org-ml-match-insert-before (sns--compile-spec spec) new-node tree)))
+
+  (defun sns-insert-after (spec new-node tree)
+    "Insert NEW-NODE after the unique node matching SPEC in TREE."
+    (sns--assert-unique-match spec tree)
+    (let ((sns--current-spec spec))
+      (org-ml-match-insert-after (sns--compile-spec spec) new-node tree)))
+
+  (defun sns-replace (spec new-node tree)
+    "Replace the unique node matching SPEC in TREE with NEW-NODE."
+    (sns--assert-unique-match spec tree)
+    (let ((sns--current-spec spec))
+      (org-ml-match-replace (sns--compile-spec spec) new-node tree)))
+
+  (defun sns-update-node (spec transform tree)
+    "Replace the unique node matching SPEC in TREE with (TRANSFORM old-node)."
+    (sns--assert-unique-match spec tree)
+    (let ((sns--current-spec spec))
+      (org-ml-match-map (sns--compile-spec spec) transform tree)))
+#+end_src
+
+*** Driver: open, transform, save
+
+The top-level entry point. Hides the buffer-load and save boilerplate
+behind a single call: pass a path and a transform from tree to tree.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-update (path tree-transform)
+    "Open PATH, parse, apply TREE-TRANSFORM, write back, save."
+    (with-current-buffer (find-file-noselect path)
+      (org-ml-update-this-buffer tree-transform)
+      (save-buffer)))
+#+end_src
+
+*** Make available
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (provide 'sns-emacs-api)
+#+end_src

@@ -1,0 +1,12 @@
+[tasks.tangle]
+description = "Tangle src/*.org to lisp/*.el"
+run = '''
+for f in src/*.org; do
+  emacs --batch --quick --eval "(progn (require 'org) (org-babel-tangle-file \"$f\"))"
+done
+'''
+
+[tasks.check]
+description = "Fail if the committed lisp/ differs from what src/ tangles to"
+depends = ["tangle"]
+run = "git diff --exit-code -- lisp/"
