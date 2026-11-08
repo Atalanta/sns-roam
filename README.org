@@ -15,4 +15,4 @@ Edit the org files in =src/=, then run =mise run tangle=. =mise run check= fails
 
 * Status
 
-The history of both org files comes from =~/.emacs.d=. Emacs still loads the copies in =~/.emacs.d/sns-emacs-modules=, and the Claude skills =roam-fetch= and =roam-distill= still point there. Nothing in the running setup has changed yet.
+The history of both org files comes from =~/.emacs.d=. Emacs loads =sns-roam-meeting-note= from this repository on first use, through a =use-package= block in =~/.emacs.d/README.org=. The copies in =~/.emacs.d/sns-emacs-modules= stay in place, and the Claude skills =roam-fetch= and =roam-distill= still load those.
