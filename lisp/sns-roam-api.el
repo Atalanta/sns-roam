@@ -544,8 +544,7 @@ same time value. SLUG-SOURCE, if non-nil, is slugified for the
 filename in place of TITLE — use it to decouple the filename slug
 from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
-same time value via `format-time-string'. Returns
-(:id :title :file). Errors if the destination already exists."
+Returns (:id :title :file). Errors if the destination already exists."
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
