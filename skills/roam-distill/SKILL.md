@@ -119,14 +119,17 @@ Write:
   full stop). One-directional — backlinks give the reverse. **Does NOT dedupe:
   this skill must check for an existing link before calling it.**
 - `(sns-roam-set-body ID NEW-BODY)` → `(:id :file)`. NEW-BODY is a **string** of
-  org prose (drawer + `#+title` preserved, body replaced). Whole-body replace —
-  use when rewriting the entire body (e.g. promoting a sparse fleeting note).
+  org prose (drawer + `#+title` preserved). Replaces only the text before the
+  first heading; existing `* ` headings and their content stay. Use when
+  rewriting a note that has no headings (e.g. a sparse fleeting note). It
+  cannot change a heading: tell the owner to edit that section by hand.
 - `(sns-roam-replace-element ID PRED NEW-ELEMENT)` → `(:id :file)`. **Transform:**
   replaces the single body element matching PRED (a unary org-ml-node predicate)
   with NEW-ELEMENT (a built org-ml node). Asserts exactly one match — loud error
   on zero or many, so an ambiguous edit never hits the wrong element. Use to
   rewrite one paragraph/claim in place without reproducing the rest of the body.
-- `(sns-roam-set-property ID KEY VALUE)`, `(sns-roam-set-keyword ID KEY VALUE)`,
+  Reaches only the text before the first heading.
+- `(sns-roam-set-property ID KEY VALUE)` (drawer, e.g. `KIND`), `(sns-roam-set-keyword ID KEY VALUE)` (`#+` line, e.g. `TITLE`),
   `(sns-roam-rename ID NEW-TITLE)` → for curation flows (promote, retitle).
 
 All body mutations flow through one shared boundary (`sns-roam--update-section`):
@@ -269,14 +272,16 @@ a forward neighbour of FROM.
 
 When a note's body needs changing — retighten a claim, fix a stale sentence,
 plain back flourish, promote a fleeting note — use `replace-element` for a
-single element, or `set-body` for a whole-body rewrite.
+single element, or `set-body` to rewrite the text before the first heading.
+Neither reaches a heading or the content under one; for those, tell the owner
+to edit the section by hand.
 
 1. **Read the note.** Fetch the current body; identify the element to change.
 2. **Choose the tool.**
    - One paragraph/element changing, rest stays → `replace-element` (build a
      predicate that matches exactly that element, and the replacement AST).
-   - Whole body being rewritten (e.g. sparse fleeting note → full claim) →
-     `set-body`.
+   - Text before the first heading being rewritten (e.g. sparse fleeting note
+     → full claim) → `set-body`. Headings stay as they are.
 3. **Build the replacement as AST.** Preserve any `[[id:]]` links the old
    element carried unless the edit deliberately drops them — reproduce them in
    the new element.
@@ -289,7 +294,7 @@ single element, or `set-body` for a whole-body rewrite.
 Predicate discipline: `replace-element` matches exactly one element or errors.
 Write the predicate narrowly (match on distinctive text in the target
 element), and if it matches zero or many, tighten it — do not fall back to
-`set-body` blindly, since that reproduces the whole body and risks dropping
+`set-body` blindly, since that reproduces the text before the first heading and risks dropping
 content.
 
 ### Promote a fleeting note
@@ -297,7 +302,8 @@ content.
 `:KIND: imported` / fleeting notes become `permanent` by *curation*, not
 mechanically:
 1. Rewrite the body into claim-shaped prose (`replace-element` or `set-body`).
-2. `set-keyword` KIND → `permanent`.
+2. `set-property` KIND → `permanent` (`KIND` lives in the property drawer;
+   `set-keyword` would add a `#+kind:` line and leave the drawer unchanged).
 3. `rename` if the title isn't yet a claim.
 4. Link it into the graph (`append-link`) — a permanent note is not finished
    until connected.
@@ -323,9 +329,11 @@ mechanically:
   reverse. Two physical links is double-maintenance.
 - **Do NOT slice-and-rejoin parsed org-ml node lists** in any transform — map
   the child list whole, filter don't slice (memory `orgml-parsed-node-slice-gotcha`).
-- **Do NOT use `set-body` to change one element.** Whole-body replace forces
-  reproducing everything you keep and risks dropping content/links. Use
-  `replace-element` with a narrow predicate.
+- **Do NOT use `set-body` to change one element.** It replaces the text before
+  the first heading, so you must reproduce everything you keep there and risk
+  dropping content/links. Use `replace-element` with a narrow predicate.
+- **Do NOT use `set-body` or `replace-element` on a heading.** They cannot
+  reach one. Tell the owner to edit that section by hand.
 - **Do NOT write a loose `replace-element` predicate.** It must match exactly
   one element. Match on distinctive text; on zero/many it errors — tighten it,
   don't work around it.
