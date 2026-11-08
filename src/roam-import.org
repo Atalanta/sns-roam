@@ -1,6 +1,6 @@
 #+TITLE: Roam Import — Obsidian → org-roam pipeline
 #+AUTHOR: SNS
-#+PROPERTY: header-args:emacs-lisp :tangle "sns-emacs-modules/sns-roam-import.el" :mkdirp yes :results silent
+#+PROPERTY: header-args:emacs-lisp :tangle "../lisp/sns-roam-import.el" :mkdirp yes :results silent
 
 * Overview
 
@@ -14,12 +14,12 @@ org syntax, wikilink shape, heading shift, YAML →
 =[[file:slug][text]]= links into =[[id:UUID][text]]= using the
 slug→UUID map produced in a first pass.
 
-This file tangles to =sns-emacs-modules/sns-roam-import.el= and
-is loaded via =(require 'sns-roam-import)= once we wire it.
-Tangle:
+This file tangles to =lisp/sns-roam-import.el=, which is committed,
+and is loaded with =(require 'sns-roam-import)= once we wire it.
+From the repository root, tangle with =mise run tangle=, or:
 
 #+begin_src sh :tangle no
-emacs --batch --load org --eval '(org-babel-tangle-file "roam-import.org")'
+emacs --batch --load org --eval '(org-babel-tangle-file "src/roam-import.org")'
 #+end_src
 
 ** Pipeline shape

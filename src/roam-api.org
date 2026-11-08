@@ -1,6 +1,6 @@
 #+TITLE: Roam API — Claude bridge into the slipbox
 #+AUTHOR: SNS
-#+PROPERTY: header-args:emacs-lisp :tangle "sns-emacs-modules/sns-roam-api.el" :mkdirp yes :results silent
+#+PROPERTY: header-args:emacs-lisp :tangle "../lisp/sns-roam-api.el" :mkdirp yes :results silent
 
 * Overview
 
@@ -14,11 +14,12 @@ Two-layer split:
 - *org-ml* for body content / excerpts / structural edits (write
   side, later).
 
-This file tangles to =sns-emacs-modules/sns-roam-api.el= and is
-loaded via =(require 'sns-roam-api)= in =init.el=. Tangle with:
+This file tangles to =lisp/sns-roam-api.el=, which is committed, and
+is loaded with =(require 'sns-roam-api)=. From the repository root,
+tangle with =mise run tangle=, or:
 
 #+begin_src sh :tangle no
-emacs --batch --load org --eval '(org-babel-tangle-file "roam-api.org")'
+emacs --batch --load org --eval '(org-babel-tangle-file "src/roam-api.org")'
 #+end_src
 
 * Header
@@ -1007,6 +1008,10 @@ of the bridge primitives.
     The importer threads a derived creation time here so imported
     notes preserve their authored timestamps; capture-template
     callers omit it and get =now=.
+  - =SLUG-SOURCE= (string, optional): slugified for the filename in
+    place of TITLE. Use it to decouple the filename slug from a
+    title that carries extra detail (e.g. an appended date), so the
+    file stays cleanly named while the title remains human.
 - *Output*: plist =(:id ID :title TITLE :file PATH)=.
 - *Side effects*:
   - New file written under =org-roam-directory= via
@@ -1017,8 +1022,8 @@ of the bridge primitives.
 - *Discipline*:
   - Errors loudly if the destination file already exists. Do not
     overwrite — collisions almost certainly mean a bug.
-  - Slug derived from TITLE via =org-roam-node-slugify= for
-    parity with the capture template.
+  - Slug derived from SLUG-SOURCE when given, else from TITLE, via
+    =org-roam-node-slugify= for parity with the capture template.
   - Timestamp prefix uses =current-time= at call site by default;
     callers passing CREATED-TIME override both the prefix and the
     drawer property so an imported note preserves its authored
@@ -1058,7 +1063,7 @@ ALIASES is a list of strings; when non-empty an extra
                                   aliases " "))))
       base)))
 
-(defun sns-roam-create-node (title kind &optional elements id aliases created-time)
+(defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
 Slugifies TITLE for the filename, writes the file under
@@ -1071,10 +1076,14 @@ optional list of strings; when non-empty written as
 non-nil, is an emacs internal time value used in place of
 `current-time' for both the :CREATED: property and the
 filename's 14-digit prefix; both outputs are formatted from the
+same time value. SLUG-SOURCE, if non-nil, is slugified for the
+filename in place of TITLE — use it to decouple the filename slug
+from a title that carries extra detail (e.g. an appended date),
+so the file stays cleanly named while the title remains human.
 same time value via `format-time-string'. Returns
 (:id :title :file). Errors if the destination already exists."
   (let* ((id       (or id (org-id-new)))
-         (slug     (org-roam-node-slugify title))
+         (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
          (filename (concat prefix "-" slug ".org"))
          (path     (expand-file-name filename org-roam-directory))
@@ -1133,6 +1142,66 @@ same time value via `format-time-string'. Returns
   taxonomy lives in the user's head, and a single typo in the
   value should be visible in the file rather than rejected at
   the API.
+
+* Create: a dated meeting note
+
+Create a fresh =fleeting= node for one occurrence of a recurring
+meeting and open it for editing. Interactive: =M-x
+sns-roam-meeting-note= prompts for the series name.
+
+** Contract
+
+- *Input*: =SERIES= (string), the stable series name, such as
+  "alan-smithee-1-1", "pir-prep" or "incident-review". It is trimmed,
+  and an empty name is an error.
+- *Output*: the =sns-roam-create-node= plist =(:id :title :file)=.
+- *Side effects*: the new file is written through
+  =sns-roam-create-node= and then visited.
+- *Discipline*:
+  - The title is SERIES with today's ISO date appended, so each
+    occurrence is a distinct node in the node-find picker.
+  - The filename slug derives from the bare SERIES, so the file is
+    not double-dated. Org-roam already supplies the timestamp prefix.
+  - KIND is "fleeting": raw meeting capture, to be mined into
+    permanent notes later.
+  - It always creates a fresh instance and never finds an existing
+    node, so identical series names never collide.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--meeting-title (series time)
+  "Return the title for a meeting-note instance of SERIES at TIME.
+Appends an ISO date so instances are distinguishable in the
+node-find picker while sharing a series name. Pure."
+  (format "%s %s" series (format-time-string "%Y-%m-%d" time)))
+
+(defun sns-roam-meeting-note (series)
+  "Create a dated note instance for a recurring meeting SERIES.
+
+SERIES is the stable series name (e.g. \"alan-smithee-1-1\",
+\"pir-prep\", \"incident-review\"). The new node's title is
+SERIES with today's date appended (\"alan-smithee-1-1 2026-06-16\")
+so each occurrence is a distinct, picker-distinguishable node;
+the filename slug derives from the bare SERIES, so the file is
+not double-dated (org already supplies the timestamp prefix).
+KIND is \"fleeting\" — raw meeting capture, to be mined into
+permanent notes later. Always creates a fresh instance — never
+finds an existing node — so identical series names never
+collide. Opens the new file for editing.
+
+Returns the create plist (:id :title :file)."
+  (interactive
+   (list (read-string "Recurring meeting series (e.g. alan-smithee-1-1): ")))
+  (let* ((trimmed (string-trim series)))
+    (when (string-empty-p trimmed)
+      (error "sns-roam-meeting-note: empty series name"))
+    (let* ((now    (current-time))
+           (title  (sns-roam--meeting-title trimmed now))
+           (result (sns-roam-create-node title "fleeting" nil nil nil now trimmed)))
+      (find-file (plist-get result :file))
+      result)))
+#+end_src
 
 * Footer
 
