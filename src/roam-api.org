@@ -531,10 +531,11 @@ update (which would mean it isn't a well-formed roam file)."
 
 * Mutate: replace the body of a node
 
-Replace everything *after* the property drawer and =#+title:=
-keyword with new content. The drawer and title are preserved
-verbatim; everything from the line after =#+title:= through
-end-of-buffer is rewritten.
+Replace the paragraphs and other body elements that come before
+the first heading with new content. Property drawers, =#+=
+keywords (=#+title:=, =#+filetags:=) and every existing heading
+with its content stay as they are. To change a heading, edit it
+by hand.
 
 Used for trimming / rewriting fleeting captures into atomic
 permanent notes. The minimum viable body-write — surgical
@@ -550,9 +551,10 @@ paragraph edits are a later primitive.
     (we ensure the file ends in exactly one =\n=).
 - *Output*: =t= on success.
 - *Side effect*: rewrites the file on disk.
-- *Discipline*: replaces the *entire* body. There is no merge,
-  no append. If you want to add to existing content, read the
-  current body first, concatenate, and call this with the result.
+- *Discipline*: replaces the body elements before the first
+  heading. There is no merge, no append. If you want to add to
+  existing content there, read it first, concatenate, and call
+  this with the result.
 
 ** Implementation
 
@@ -636,9 +638,11 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
 (defun sns-roam-set-body (id new-body)
   "Replace the body of roam node ID with NEW-BODY.
 
-The property drawer and =#+title:= keyword are preserved verbatim;
-the body (everything after them) is replaced with NEW-BODY parsed
-as org prose. NEW-BODY is a string; empty clears the body.
+The paragraphs and other body elements before the first heading
+are replaced with NEW-BODY parsed as org prose. Property drawers,
+=#+= keywords (=#+title:=, =#+filetags:=) and every existing
+heading with its content stay. NEW-BODY is a string; empty clears
+those body elements.
 Returns (:id :file). Errors loudly on unknown ID or malformed file."
   (sns-roam--update-section
    id

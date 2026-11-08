@@ -71,5 +71,31 @@ Deletes the directory afterwards, so no test touches the owner's slipbox."
       (should (equal "sns-roam-meeting-note: empty series name" (cadr err)))
       (should (null (sns-roam-test--org-files))))))
 
+(ert-deftest sns-roam-set-body-keeps-keywords-and-headings ()
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "note.org" org-roam-directory)))
+      (with-temp-file file
+        (insert ":PROPERTIES:\n:ID: set-body-test\n:KIND: fleeting\n:END:\n"
+                "#+title: set body test\n#+filetags: :research:\n\n"
+                "Old intro one.\n\nOld intro two.\n\n"
+                "* Old section\nOld section paragraph.\n"))
+      (unwind-protect
+          ;; The roam database is not under test; point the lookup at the file.
+          (cl-letf (((symbol-function 'sns-roam--node-file-or-error)
+                     (lambda (_id) file)))
+            (sns-roam-set-body "set-body-test" "New intro.")
+            (let ((text (with-temp-buffer
+                          (insert-file-contents file)
+                          (buffer-string))))
+              (should (string-match-p "^New intro\\.$" text))
+              (should (string-match-p "^#\\+filetags: :research:$" text))
+              (should (string-match-p "^:KIND: +fleeting$" text))
+              (should (string-match-p "^\\* Old section$" text))
+              (should (string-match-p "^Old section paragraph\\.$" text))
+              (should-not (string-match-p "Old intro" text))))
+        (let ((buffer (get-file-buffer file)))
+          (when buffer
+            (kill-buffer buffer)))))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

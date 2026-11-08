@@ -357,9 +357,11 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
 (defun sns-roam-set-body (id new-body)
   "Replace the body of roam node ID with NEW-BODY.
 
-The property drawer and =#+title:= keyword are preserved verbatim;
-the body (everything after them) is replaced with NEW-BODY parsed
-as org prose. NEW-BODY is a string; empty clears the body.
+The paragraphs and other body elements before the first heading
+are replaced with NEW-BODY parsed as org prose. Property drawers,
+=#+= keywords (=#+title:=, =#+filetags:=) and every existing
+heading with its content stay. NEW-BODY is a string; empty clears
+those body elements.
 Returns (:id :file). Errors loudly on unknown ID or malformed file."
   (sns-roam--update-section
    id
