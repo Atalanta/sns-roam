@@ -85,8 +85,6 @@ right to live there.
 (require 'cl-lib)
 (require 'subr-x)
 
-(use-package yaml
-  :ensure t)
 (require 'yaml)
 #+end_src
 

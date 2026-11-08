@@ -2,7 +2,7 @@
 ;;
 ;; Author: Stephen Nelson-Smith <stephen@atalanta-systems.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "31.1") (org-roam "20260425") (org-ml "20250514"))
+;; Package-Requires: ((emacs "31.1") (org-roam "20260425") (org-ml "20250514") (yaml "20260605"))
 ;; URL: https://github.com/Atalanta/sns-roam
 ;; Keywords: outlines, tools
 ;;

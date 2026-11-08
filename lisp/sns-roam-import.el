@@ -8,8 +8,6 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(use-package yaml
-  :ensure t)
 (require 'yaml)
 
 (defun sns-roam-import--read-source (path)

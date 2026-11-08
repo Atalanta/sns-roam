@@ -116,5 +116,16 @@ Deletes the directory afterwards, so no test touches the owner's slipbox."
     (should (alist-get :url (package-desc-extras info)))
     (should (alist-get :authors (package-desc-extras info)))))
 
+(ert-deftest sns-roam-library-installs-no-packages-when-loaded ()
+  ;; A `use-package ... :ensure t' in a library installs packages while
+  ;; package-vc compiles it, and a symbol it leaves in
+  ;; `package-selected-packages' crashed the first start on a new machine.
+  ;; Dependencies belong in the Package-Requires header.
+  (dolist (file (directory-files (file-name-directory sns-roam-test--api-file)
+                                 t "\\.el\\'"))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (should-not (re-search-forward ":ensure" nil t)))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
