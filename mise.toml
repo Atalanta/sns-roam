@@ -6,6 +6,11 @@ for f in src/*.org; do
 done
 '''
 
+[tasks.test]
+description = "Tangle, then run the ert tests in a batch Emacs"
+depends = ["tangle"]
+run = "emacs --batch --quick --load test/sns-roam-test.el --funcall ert-run-tests-batch-and-exit"
+
 [tasks.check]
 description = "Fail if the committed lisp/ differs from what src/ tangles to"
 depends = ["tangle"]
