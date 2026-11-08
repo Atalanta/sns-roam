@@ -19,6 +19,12 @@
 (require 'org-ml)
 (require 'sns-roam-api)
 
+(defconst sns-roam-test--api-file
+  (expand-file-name "../lisp/sns-roam-api.el"
+                    (file-name-directory
+                     (or load-file-name buffer-file-name)))
+  "Absolute path of the library under test, fixed when this file loads.")
+
 (defmacro sns-roam-test--with-roam-dir (&rest body)
   "Run BODY with `org-roam-directory' set to a fresh temporary directory.
 Deletes the directory afterwards, so no test touches the owner's slipbox."
@@ -96,6 +102,19 @@ Deletes the directory afterwards, so no test touches the owner's slipbox."
         (let ((buffer (get-file-buffer file)))
           (when buffer
             (kill-buffer buffer)))))))
+
+(ert-deftest sns-roam-api-declares-its-package-requirements ()
+  (let* ((file sns-roam-test--api-file)
+         (info (with-temp-buffer
+                 (insert-file-contents file)
+                 (package-buffer-info)))
+         (required (mapcar #'car (package-desc-reqs info))))
+    (should (eq 'sns-roam-api (package-desc-name info)))
+    (should (member 'org-roam required))
+    (should (member 'org-ml required))
+    (should (member 'emacs required))
+    (should (alist-get :url (package-desc-extras info)))
+    (should (alist-get :authors (package-desc-extras info)))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
