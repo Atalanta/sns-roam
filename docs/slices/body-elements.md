@@ -20,7 +20,6 @@ On 2026-11-09 updating two reference notes needed their existing paragraphs. The
 
 - Reading the content under a headline (issues #1 and #2).
 - The reference-note update flow and its other steps (issue #9).
-- Notes whose ID is on a headline, not at the top of the file.
 
 ## Invariants
 
@@ -49,8 +48,7 @@ Scenario: S11.3 A note with no body
 
 - The new public function is `sns-roam-body-elements ID`, in `src/roam-api.org`, returning `(:id ID :file FILE :elements NODES)`, with `:elements` nil for an empty body. Issue #7 says it returns the elements, and AGENTS.md says functions return plists, so the plist wins.
 - `sns-roam--update-section` (near line 628) resolves the ID with `sns-roam--node-file-or-error` and parses `find-file-noselect`'s buffer, which holds unsaved edits when the note is open. The read parses that same buffer, so Claude shows the text the following edit acts on. `sns-roam--section-header-p` (line 591) picks out the drawer and `#+` keywords.
-- In `skills/roam-distill/SKILL.md`, the Read list under "The primitives this skill composes" gains the function, and step 1 of "The transform flow" names it as the way to fetch the body and show it with `org-ml-to-trimmed-string`.
-- The slice 9 tests in `test/sns-roam-test.el` show how to create notes against a temporary database.
+- In `skills/roam-distill/SKILL.md`, the Read list under "The primitives this skill composes" gains the function, and step 1 of "The transform flow" names it as the way to fetch the body and show it with `org-ml-to-trimmed-string`, and to tell the owner the note has no paragraphs before its first headline when `:elements` is nil.
 
 ## Questions to resolve
 
@@ -58,4 +56,4 @@ None.
 
 ## Done when
 
-The builder adds ert tests to `test/sns-roam-test.el` for the three paragraphs of S11.1, the unsaved "£120" of S11.2, and the nil `:elements` of S11.3. The S11.1 test shows the file's bytes and modification time equal before and after the call. Further tests show a note built by `sns-roam-create-node` from a paragraph and a list coming back as the same two strings, and the `sns-roam:` error on an unknown ID. The builder runs a file-and-load script, as the skill's step 1 describes, on a note in a temporary slipbox and shows the three paragraphs it prints. `mise run check` and `mise run test` pass.
+The builder adds ert tests to `test/sns-roam-test.el` for the three paragraphs of S11.1, the unsaved "£120" of S11.2, and the nil `:elements` of S11.3. The S11.1 and S11.2 tests show the file's bytes and modification time equal before and after the call, and the S11.2 test shows the buffer still modified and holding "£120" afterwards. Further tests show a note built by `sns-roam-create-node` from a paragraph and a list coming back as the same two strings, and the `sns-roam:` error on an unknown ID. The builder runs a file-and-load script, as the skill's step 1 describes, on a note in a temporary slipbox and shows the three paragraphs it prints, then on a header-only note and shows `:elements nil`, which step 1 tells Claude to report as no paragraphs. `mise run check` and `mise run test` pass.
