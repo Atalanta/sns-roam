@@ -691,6 +691,144 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                    (sns-roam-test--element-texts
                     (sns-roam-body-elements "contract-id"))))))
 
+;;; --- sns-roam-history-anchor (slice 13) ---
+
+(defconst sns-roam-test--history-body
+  (concat "Current state: Pro edition, 40 seats.\n\n"
+          "Open: renewal date.\n\n"
+          "2026-11-09: asked for a discount (email from the vendor).\n\n"
+          "2026-11-06: offered 1- and 2-year terms (call).\n")
+  "Body of a reference note in the layout `sns-roam-history-anchor' reads.")
+
+(defun sns-roam-test--anchor (body-text date)
+  "Return :anchor and :after from `sns-roam-history-anchor' on BODY-TEXT for DATE."
+  (sns-roam-test--with-reference-note body-text
+    (let ((result (sns-roam-history-anchor "contract-id" date)))
+      (list (plist-get result :anchor) (plist-get result :after)))))
+
+(defun sns-roam-test--anchor-error (body-text date)
+  "Return the error message `sns-roam-history-anchor' raises on BODY-TEXT for DATE."
+  (sns-roam-test--with-reference-note body-text
+    (cadr (should-error (sns-roam-history-anchor "contract-id" date)
+                        :type 'error))))
+
+(ert-deftest sns-roam-history-anchor-puts-a-middle-date-before-the-older-line ()
+  ;; S13.1
+  (sns-roam-test--with-reference-note sns-roam-test--history-body
+    (should (equal (list :id "contract-id" :file file
+                         :anchor "2026-11-06: offered 1- and 2-year terms (call)."
+                         :after nil)
+                   (sns-roam-history-anchor "contract-id" "2026-11-08")))))
+
+(ert-deftest sns-roam-history-anchor-puts-the-newest-date-before-the-newest-line ()
+  (should (equal '("2026-11-09: asked for a discount (email from the vendor)." nil)
+                 (sns-roam-test--anchor sns-roam-test--history-body "2026-11-12"))))
+
+(ert-deftest sns-roam-history-anchor-puts-the-oldest-date-after-the-last-line ()
+  (should (equal '("2026-11-06: offered 1- and 2-year terms (call)." t)
+                 (sns-roam-test--anchor sns-roam-test--history-body "2026-10-01"))))
+
+(ert-deftest sns-roam-history-anchor-puts-an-equal-date-before-the-existing-line ()
+  (should (equal '("2026-11-06: offered 1- and 2-year terms (call)." nil)
+                 (sns-roam-test--anchor sns-roam-test--history-body "2026-11-06"))))
+
+(ert-deftest sns-roam-history-anchor-with-no-history-goes-after-the-last-paragraph ()
+  (should (equal '("Open: renewal date." t)
+                 (sns-roam-test--anchor
+                  "Current state: Pro edition.\n\nOpen: renewal date.\n"
+                  "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-writes-nothing ()
+  (sns-roam-test--with-reference-note sns-roam-test--history-body
+    (let ((state-before (sns-roam-test--file-state file)))
+      (sns-roam-history-anchor "contract-id" "2026-11-08")
+      (should (equal state-before (sns-roam-test--file-state file)))
+      (should-not (buffer-modified-p (get-file-buffer file))))))
+
+(ert-deftest sns-roam-history-anchor-refuses-a-date-not-written-yyyy-mm-dd ()
+  (should (equal "sns-roam: history-anchor needs a date as YYYY-MM-DD, not \"8 Nov 2026\""
+                 (sns-roam-test--anchor-error sns-roam-test--history-body
+                                              "8 Nov 2026"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-a-note-with-a-heading ()
+  ;; S13.2: the heading follows the body, so only a parse of the whole
+  ;; buffer sees it.
+  (should (equal (concat "sns-roam: history-anchor reads notes without headings,"
+                         " not one with \"History\"")
+                 (sns-roam-test--anchor-error
+                  (concat "Current state: Pro edition.\n\n"
+                          "* History\n2026-11-06: offered terms.\n")
+                  "2026-11-12"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-a-list ()
+  (should (equal "sns-roam: history-anchor reads paragraphs only, not a plain-list"
+                 (sns-roam-test--anchor-error
+                  "Current state: Pro edition.\n\n- 2026-11-06: offered terms.\n"
+                  "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-an-empty-body ()
+  (should (equal "sns-roam: history-anchor found no paragraphs in the body"
+                 (sns-roam-test--anchor-error "" "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-an-open-paragraph-after-a-dated-line ()
+  (should (equal (concat "sns-roam: history-anchor needs the dated lines"
+                         " as one run at the end of the body")
+                 (sns-roam-test--anchor-error
+                  (concat "Current state: Pro edition.\n\n"
+                          "2026-11-09: asked for a discount.\n\n"
+                          "Open: renewal date.\n\n"
+                          "2026-11-06: offered terms.\n")
+                  "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-dated-lines-oldest-first ()
+  (should (equal (concat "sns-roam: history-anchor needs the dated lines newest first,"
+                         " but 2026-11-06 comes before 2026-11-09")
+                 (sns-roam-test--anchor-error
+                  (concat "Open: renewal date.\n\n"
+                          "2026-11-06: offered terms.\n\n"
+                          "2026-11-09: asked for a discount.\n")
+                  "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-refuses-an-anchor-text-that-appears-twice ()
+  (should (equal (concat "sns-roam: history-anchor found the anchor"
+                         " \"2026-11-06: offered terms.\" twice")
+                 (sns-roam-test--anchor-error
+                  (concat "Open: renewal date.\n\n"
+                          "2026-11-06: offered terms.\n\n"
+                          "2026-11-06: offered terms.\n")
+                  "2026-11-08"))))
+
+(ert-deftest sns-roam-history-anchor-rejects-an-unknown-id ()
+  (sns-roam-test--with-roam-dir
+    (should (equal "sns-roam: no roam node with id \"missing-id\""
+                   (cadr (should-error (sns-roam-history-anchor "missing-id" "2026-11-08")
+                                       :type 'error))))))
+
+(ert-deftest sns-roam-history-anchor-feeds-insert-element ()
+  ;; S13.3: the anchor and :after go to `insert-element' unchanged, and
+  ;; every other paragraph, the link included, keeps its text.
+  (sns-roam-test--with-reference-note
+      (concat "Current state: Pro edition.\n\n"
+              "Open: renewal date.\n\n"
+              "Related claims: [[id:claim-id][Seats track headcount]].\n\n"
+              "2026-11-09: asked for a discount.\n\n"
+              "2026-11-06: offered terms.\n")
+    (let* ((place (sns-roam-history-anchor "contract-id" "2026-11-08"))
+           (anchor (plist-get place :anchor)))
+      (sns-roam-insert-element "contract-id"
+                               (lambda (node)
+                                 (string= anchor (org-ml-to-trimmed-string node)))
+                               (org-ml-build-paragraph "2026-11-08: met the vendor.")
+                               (plist-get place :after))
+      (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                             "Current state: Pro edition.\n\n"
+                             "Open: renewal date.\n\n"
+                             "Related claims: [[id:claim-id][Seats track headcount]].\n\n"
+                             "2026-11-09: asked for a discount.\n\n"
+                             "2026-11-08: met the vendor.\n\n"
+                             "2026-11-06: offered terms.\n")
+                     (sns-roam-test--text-from-drawer-end file))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.

@@ -125,6 +125,72 @@ Both follow show, confirm, apply.
   subject, capture the reasoning as a permanent claim and link it from the
   reference note.
 
+### Adding a history line
+
+When an email or a meeting adds an event to one or more reference notes,
+`sns-roam-history-anchor` decides where each line goes. Never read the
+note file, and never place the line yourself or rewrite the body with
+`set-body`.
+
+1. **Draft each line.** One paragraph per note, starting with the event's
+   date as `YYYY-MM-DD:` and naming its source.
+2. **Find every anchor first.** Run this script, with the notes' IDs and
+   the date, before you show anything:
+
+   ```elisp
+   ;; -*- lexical-binding: t; -*-
+   (let* ((date "2026-11-08")
+          (ids '("NOTE-ID-1" "NOTE-ID-2"))
+          (places
+           (mapcar
+            (lambda (id)
+              (condition-case err
+                  (append (sns-roam-history-anchor id date)
+                          (list :elements
+                                (mapcar #'org-ml-to-trimmed-string
+                                        (plist-get (sns-roam-body-elements id)
+                                                   :elements))))
+                (error (list :id id :error (error-message-string err)))))
+            ids)))
+     (with-temp-file "/tmp/history-anchor.out"
+       (prin1 places (current-buffer))))
+   ```
+
+   Neither call writes anything.
+3. **Stop on any error.** If any entry has `:error`, report every error,
+   naming each note, and stop. Offer nothing to apply, not even for the
+   notes that passed. A note in another layout, such as one with a
+   `* History` heading, is for the owner to edit by hand.
+4. **SHOW** each note's `:elements` with the new line placed before
+   `:anchor`, or after it when `:after` is `t`. Ask to apply.
+5. **APPLY** after the owner confirms, with each note's `:id`, `:anchor`
+   and `:after` from step 2 and its line from step 1:
+
+   ```elisp
+   ;; -*- lexical-binding: t; -*-
+   (let* ((places '((:id "NOTE-ID-1" :anchor "2026-11-06: ..." :after nil
+                     :line "2026-11-08: ...")))
+          (results
+           (mapcar
+            (lambda (place)
+              (let ((anchor (plist-get place :anchor)))
+                (condition-case err
+                    (sns-roam-insert-element
+                     (plist-get place :id)
+                     (lambda (node)
+                       (string= anchor (org-ml-to-trimmed-string node)))
+                     (org-ml-build-paragraph (plist-get place :line))
+                     (plist-get place :after))
+                  (error (list :id (plist-get place :id)
+                               :error (error-message-string err))))))
+            places)))
+     (with-temp-file "/tmp/history-apply.out"
+       (prin1 results (current-buffer))))
+   ```
+
+6. **VERIFY** with `sns-roam-body-elements` that the line sits where step 4
+   showed it, and report any `:error` from step 5.
+
 ### Person notes (`:KIND: person`)
 
 - One note for each person outside Ticketmaster and Live Nation, titled
@@ -149,6 +215,13 @@ Read (for finding link targets — reuse the `roam-fetch` pipeline):
   before the note's first heading, without the drawer and `#+` lines, read
   from the buffer the next edit acts on, unsaved edits included. Writes
   nothing. `:elements` is nil when there is no body before the first heading.
+- `(sns-roam-history-anchor ID DATE)` → `(:id :file :anchor TEXT :after BOOL)`.
+  Where a history line dated DATE (`YYYY-MM-DD`) goes in a reference note:
+  before the history line TEXT, or after the last paragraph TEXT when
+  `:after` is `t`. Writes nothing. A note outside the reference layout
+  (a heading, a list or table, an empty body, dated lines that are not one
+  newest-first run at the end) is a loud `sns-roam:` error. See "Adding a
+  history line".
 
 Write:
 - `(sns-roam-create-node TITLE KIND &optional ELEMENTS ID ALIASES CREATED-TIME)`

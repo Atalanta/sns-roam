@@ -1026,6 +1026,143 @@ Returns (:id :file)."
   a list would merge.
 - *Body only.* Content under a headline is out of reach (issue #2).
 
+* Read: where a history line goes in a reference note
+
+Find the paragraph a new dated history line goes beside, so Claude
+can pass it to =insert-element= without deciding the place itself. On
+2026-11-09, with no such call, Claude read the note files directly and
+rewrote each body with =set-body= (issue #9).
+
+The supported layout is the owner's reference note: paragraphs only,
+no headings, tables or lists. A "Current state:" paragraph, an "Open:"
+paragraph, an optional "Related claims:" paragraph, then one paragraph
+per history line, newest first, each starting =YYYY-MM-DD:=.
+
+** Contract
+
+- *Input*:
+  - =ID= (string): the roam node UUID. Loud failure if unknown.
+  - =DATE= (string): the event's date as =YYYY-MM-DD=.
+- *Output*: plist =(:id ID :file FILE :anchor TEXT :after BOOL)=.
+  - TEXT is the trimmed text of the first history line dated on or
+    before DATE, with =:after= nil: the new line goes before it.
+  - With no such line, TEXT is the last paragraph's and =:after= is
+    =t=: the new line goes at the end.
+- *Side effect*: none on disk. The note is parsed from the buffer
+  =find-file-noselect= returns, as =sns-roam-body-elements= reads it,
+  headings included.
+- *Refusals*: an =sns-roam:= error when DATE is not =YYYY-MM-DD=, the
+  note has a heading or a body element that is not a paragraph, the
+  body is empty, the dated lines are not one run at the end of the
+  body, newest first, or TEXT appears in two paragraphs.
+
+** Implementation
+
+=sns-roam--history-anchor-in= is the calculation: it takes the parsed
+note's top-level children and the date, and returns the anchor or
+raises. =sns-roam-history-anchor= reads the buffer and passes the
+children in.
+
+#+begin_src emacs-lisp
+(defconst sns-roam--history-date-regexp
+  "\\`\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\):"
+  "Match the date that opens a history line, such as \"2026-11-09:\".")
+
+(defun sns-roam--history-line-date (text)
+  "Return the YYYY-MM-DD date that opens TEXT, or nil if TEXT is undated."
+  (when (string-match sns-roam--history-date-regexp text)
+    (match-string 1 text)))
+
+(defun sns-roam--history-body (top-level-children)
+  "Return the body paragraphs of a note whose parsed children are TOP-LEVEL-CHILDREN.
+Raises an `sns-roam:' error on a heading anywhere in the note, on a
+body element that is not a paragraph, or on an empty body.  Pure."
+  (let ((headline (seq-find (lambda (child) (org-ml-is-type 'headline child))
+                            top-level-children)))
+    (when headline
+      (error "sns-roam: history-anchor reads notes without headings, not one with %S"
+             (org-ml-get-property :raw-value headline))))
+  ;; With no headline, the top level is the one section, or nothing in
+  ;; an empty file.
+  (let ((body (seq-remove #'sns-roam--section-header-p
+                          (seq-mapcat #'org-ml-get-children top-level-children))))
+    (unless body
+      (error "sns-roam: history-anchor found no paragraphs in the body"))
+    (dolist (element body)
+      (unless (org-ml-is-type 'paragraph element)
+        (error "sns-roam: history-anchor reads paragraphs only, not a %s"
+               (org-ml-get-type element))))
+    body))
+
+(defun sns-roam--check-history-run (dates)
+  "Raise an `sns-roam:' error unless DATES end in one run of dates, newest first.
+DATES holds each body paragraph's opening date, or nil for an
+undated paragraph, in buffer order.  Pure."
+  (let ((run (seq-drop-while #'null dates)))
+    (when (memq nil run)
+      (error "sns-roam: history-anchor needs the dated lines as one run at the end of the body"))
+    (cl-mapc (lambda (newer older)
+               (when (string< newer older)
+                 (error "sns-roam: history-anchor needs the dated lines newest first, but %s comes before %s"
+                        newer older)))
+             run (cdr run))))
+
+(defun sns-roam--history-anchor-in (top-level-children date)
+  "Return (:anchor TEXT :after BOOL) for a line dated DATE in a parsed note.
+TOP-LEVEL-CHILDREN are the children of the note's parsed org-data.
+TEXT is the trimmed text of the first history line dated on or
+before DATE, with :after nil; with no such line, TEXT is the last
+paragraph's and :after is t.  Raises an `sns-roam:' error for a DATE
+that is not YYYY-MM-DD, for a note outside the reference layout (see
+`sns-roam--history-body' and `sns-roam--check-history-run'), or when
+TEXT is the text of two paragraphs.  Pure."
+  (unless (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\'" date)
+    (error "sns-roam: history-anchor needs a date as YYYY-MM-DD, not %S" date))
+  (let* ((texts (mapcar #'org-ml-to-trimmed-string
+                        (sns-roam--history-body top-level-children)))
+         (dates (mapcar #'sns-roam--history-line-date texts))
+         (_ (sns-roam--check-history-run dates))
+         (position (seq-position dates date
+                                 (lambda (line-date new-date)
+                                   (and line-date
+                                        (not (string< new-date line-date))))))
+         (anchor (if position (nth position texts) (car (last texts)))))
+    (when (> (seq-count (lambda (text) (string= text anchor)) texts) 1)
+      (error "sns-roam: history-anchor found the anchor %S twice" anchor))
+    (list :anchor anchor :after (null position))))
+
+(defun sns-roam-history-anchor (id date)
+  "Return where a history line dated DATE goes in reference note ID.
+
+Returns:
+  (:id ID :file FILE :anchor TEXT :after BOOL)
+
+TEXT is the trimmed text of the first history line dated on or
+before DATE, with :after nil, so the new line goes before it.  With
+no such line, TEXT is the last paragraph's and :after is t.  Pass
+TEXT and :after to `sns-roam-insert-element' with a predicate that
+compares `org-ml-to-trimmed-string' to TEXT.  The note is parsed
+from the buffer `find-file-noselect' returns, headings included.
+Writes nothing.  Errors loudly on an unknown ID, a DATE that is not
+YYYY-MM-DD, and a note outside the reference layout."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (append (list :id id :file file)
+              (sns-roam--history-anchor-in
+               (org-ml-get-children (org-ml-parse-this-buffer))
+               date)))))
+#+end_src
+
+** Discipline notes
+
+- *Read-only.* The call decides the place and writes nothing. The
+  skill shows the change and calls =insert-element= only after the
+  owner confirms.
+- *One layout, loud refusal.* A note in any other layout is an
+  error, never a guess at where its history is.
+- *An equal date goes first.* A new line dated the same day as an
+  existing one goes above it, so the newest news reads first.
+
 * Mutate: set a section-level keyword
 
 Set or replace a =#+KEY: value= keyword in the file's first
