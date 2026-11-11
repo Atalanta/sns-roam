@@ -32,7 +32,6 @@ Scenario: S13.1 An older event goes in between the newer and older lines
   Given a reference note whose history is "2026-11-09: ..." then "2026-11-06: ..."
   When the owner tells Claude about a meeting on 2026-11-08
   Then Claude shows the new line "2026-11-08: ..." between the 2026-11-09 and 2026-11-06 lines, and asks to apply
-  And the note's file is unchanged until the owner confirms
 
 Scenario: S13.2 A note in another layout stops a batch before anything is offered
   Given two notes, and the second has its history under a `* History` heading
@@ -47,7 +46,7 @@ Scenario: S13.3 The applied note keeps every other paragraph
 ## Facts the builder needs
 
 - Supported layout, from the owner's reference notes since 2026-11-09: paragraphs only, no headings, tables or lists. A "Current state:" paragraph, an "Open:" paragraph, an optional "Related claims:" paragraph, then one paragraph per history line, newest first, each starting `YYYY-MM-DD:`. Fixtures are invented, never the owner's notes.
-- New `sns-roam-history-anchor ID DATE`, read-only, returns `(:id :file :anchor TEXT :after BOOL)`. TEXT is the trimmed text of the first history line dated on or before DATE, with `:after` nil. With no such line, TEXT is the last paragraph's and `:after` is t. It parses all of the buffer that `sns-roam-body-elements` reads, headings included. It raises an `sns-roam:` error for a DATE that is not `YYYY-MM-DD`, a heading or non-paragraph element, an empty body, or a TEXT that appears twice.
+- New `sns-roam-history-anchor ID DATE`, read-only, returns `(:id :file :anchor TEXT :after BOOL)`. TEXT is the trimmed text of the first history line dated on or before DATE, with `:after` nil. With no such line, TEXT is the last paragraph's and `:after` is t. It parses all of the buffer that `sns-roam-body-elements` reads, headings included. It raises an `sns-roam:` error for a DATE that is not `YYYY-MM-DD`, a heading or non-paragraph element, an empty body, history lines that are not newest first, or a TEXT that appears twice.
 - The skill's flow, in "Reference and person notes": call `sns-roam-history-anchor` for every note first, report every error and stop; otherwise show each change, confirm, and call `sns-roam-insert-element` with a predicate comparing `org-ml-to-trimmed-string` to TEXT.
 
 ## Questions to resolve
@@ -56,4 +55,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` tests the new call for a middle date, a newest date, an oldest date and a date equal to an existing line. It also tests each refusal above and an unknown ID. One test shows the file's bytes and modification time unchanged after the call. The builder runs the flow's file-and-load scripts on invented notes in a temporary slipbox. It shows the `.out` text for S13.1 and S13.2 with both files' bytes unchanged, then the file text after S13.3. `grep -n "(defun\|(defvar" skills/roam-distill/SKILL.md` shows nothing new. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` tests the new call for a middle date, a newest date, an oldest date and a date equal to an existing line. It also tests each refusal above and an unknown ID. One test shows the file's bytes and modification time unchanged after the call. The builder runs the flow's file-and-load scripts on invented notes in a temporary slipbox. It shows the `.out` text for S13.1 with the note's bytes equal before and after the preview, the `.out` text for S13.2 with both files' bytes unchanged, then the file text after S13.3. `grep -n "(defun\|(defvar" skills/roam-distill/SKILL.md` shows nothing new. `mise run check` and `mise run test` pass.
