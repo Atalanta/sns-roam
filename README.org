@@ -32,6 +32,7 @@ You need Emacs 31.1 or later, org-roam with =org-roam-directory= set, and Claude
 4. Link the skills from the installed package into Claude Code:
 
    #+begin_src sh
+   mkdir -p ~/.claude/skills
    ln -s ~/.emacs.d/elpa/sns-roam-api/skills/roam-fetch ~/.claude/skills/roam-fetch
    ln -s ~/.emacs.d/elpa/sns-roam-api/skills/roam-distill ~/.claude/skills/roam-distill
    #+end_src
