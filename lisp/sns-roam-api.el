@@ -442,6 +442,49 @@ through `sns-roam--update-section'. Returns (:id :file)."
                          (lambda (_old) new-element)
                          section)))))
 
+(defun sns-roam--insert-beside (children anchor new-element after)
+  "Return CHILDREN with NEW-ELEMENT next to ANCHOR, a member of CHILDREN.
+AFTER non-nil places it after ANCHOR, nil before.  The first of the
+pair takes post-blank 1, and the second takes the post-blank ANCHOR
+had, so the spacing after the pair is what followed ANCHOR before.
+Every other child is returned as it was.  Pure."
+  (let ((anchor-blank (org-ml-get-property :post-blank anchor)))
+    (mapcan (lambda (child)
+              (cond
+               ((not (eq child anchor)) (list child))
+               (after (list (org-ml-set-property :post-blank 1 child)
+                            (org-ml-set-property :post-blank anchor-blank
+                                                 new-element)))
+               (t (list (org-ml-set-property :post-blank 1 new-element)
+                        child))))
+            children)))
+
+(defun sns-roam-insert-element (id pred new-element &optional after)
+  "Insert NEW-ELEMENT beside the unique body element of node ID matching PRED.
+PRED is a unary predicate on an org-ml node and sees only body
+elements, never the property drawer or `#+' keywords.  NEW-ELEMENT
+is a built org-ml node.  AFTER non-nil inserts after the match, nil
+before it.  One blank line separates the two; the blank lines that
+followed the match still follow the pair.  Every other element keeps
+its text.  Errors loudly, leaving the file unchanged, when PRED
+matches zero or many elements or ID is unknown.  Composes through
+`sns-roam--update-section'.  Returns (:id :file)."
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (sns-roam--map-children
+      (lambda (children)
+        (let ((matches (seq-filter
+                        (lambda (child)
+                          (and (not (sns-roam--section-header-p child))
+                               (funcall pred child)))
+                        children)))
+          (unless (= 1 (length matches))
+            (error "sns-roam: insert-element matched %d elements, need exactly 1"
+                   (length matches)))
+          (sns-roam--insert-beside children (car matches) new-element after)))
+      section))))
+
 (defun sns-roam--upsert-keyword (section key value)
   "Return SECTION with KEY's keyword set to VALUE.
 Replaces existing keyword in place; appends if absent."

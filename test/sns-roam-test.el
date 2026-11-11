@@ -437,6 +437,138 @@ Comparing from there shows a blank line added after the drawer, after
       (should (equal "sns-roam: no roam node with id \"missing-id\""
                      (cadr err))))))
 
+;;; --- sns-roam-insert-element (slice 12) ---
+
+(defconst sns-roam-test--reference-header
+  ":PROPERTIES:\n:ID: contract-id\n:KIND: reference\n:END:\n#+title: Vendor contract\n\n"
+  "Drawer and title of the reference note the slice 12 tests edit.")
+
+(defun sns-roam-test--containing (text)
+  "Return a predicate true of an org-ml node whose text contains TEXT."
+  (lambda (node)
+    (string-match-p (regexp-quote text) (org-ml-to-trimmed-string node))))
+
+(defmacro sns-roam-test--with-reference-note (body-text &rest body)
+  "Run BODY with `file' bound to a registered reference note.
+The note is `sns-roam-test--reference-header' followed by BODY-TEXT,
+with ID \"contract-id\".  Kills the note's buffer afterwards."
+  (declare (indent 1))
+  `(sns-roam-test--with-roam-dir
+     (let ((file (expand-file-name "contract.org" org-roam-directory)))
+       (sns-roam-test--register
+        file (concat sns-roam-test--reference-header ,body-text))
+       (unwind-protect (progn ,@body)
+         (sns-roam-test--kill-file-buffer file)))))
+
+(ert-deftest sns-roam-insert-element-adds-a-history-line-above-the-newest ()
+  ;; S12.1.  On 2026-11-10 a rewrite of one paragraph with `set-body'
+  ;; dropped a line (issue #10).
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n\n2026-10-24: offered terms.\n"
+    (let ((result (sns-roam-insert-element
+                   "contract-id"
+                   (sns-roam-test--containing "2026-10-24")
+                   (org-ml-build-paragraph "2026-11-11: signed a 2-year term."))))
+      (should (equal (list :id "contract-id" :file file) result))
+      (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                             "Edition: Pro.\n\nOpen: renewal date.\n\n"
+                             "2026-11-11: signed a 2-year term.\n\n"
+                             "2026-10-24: offered terms.\n")
+                     (sns-roam-test--text-from-drawer-end file))))))
+
+(ert-deftest sns-roam-insert-element-after-the-last-paragraph-ends-the-note ()
+  ;; S12.2
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n\n2026-10-24: offered terms.\n"
+    (sns-roam-insert-element "contract-id"
+                             (sns-roam-test--containing "2026-10-24")
+                             (org-ml-build-paragraph "See also the vendor list.")
+                             t)
+    (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                           "Edition: Pro.\n\nOpen: renewal date.\n\n"
+                           "2026-10-24: offered terms.\n\n"
+                           "See also the vendor list.\n")
+                   (sns-roam-test--text-from-drawer-end file)))))
+
+(ert-deftest sns-roam-insert-element-refuses-an-anchor-that-matches-two ()
+  ;; S12.3
+  (sns-roam-test--with-reference-note
+      "2026-10-24: offered terms.\n\n2026-10-30: asked for a discount.\n"
+    (let ((state-before (sns-roam-test--file-state file))
+          (err (should-error
+                (sns-roam-insert-element "contract-id"
+                                         (sns-roam-test--containing "2026")
+                                         (org-ml-build-paragraph "New line.")
+                                         t)
+                :type 'error)))
+      (should (equal "sns-roam: insert-element matched 2 elements, need exactly 1"
+                     (cadr err)))
+      (should (equal state-before (sns-roam-test--file-state file))))))
+
+(ert-deftest sns-roam-insert-element-refuses-an-anchor-that-matches-nothing ()
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n"
+    (let ((state-before (sns-roam-test--file-state file))
+          (err (should-error
+                (sns-roam-insert-element "contract-id"
+                                         (sns-roam-test--containing "2027")
+                                         (org-ml-build-paragraph "New line."))
+                :type 'error)))
+      (should (equal "sns-roam: insert-element matched 0 elements, need exactly 1"
+                     (cadr err)))
+      (should (equal state-before (sns-roam-test--file-state file))))))
+
+(ert-deftest sns-roam-insert-element-never-shows-the-header-to-the-predicate ()
+  ;; The title and the drawer both contain "contract", so a predicate
+  ;; that saw them would match three elements.
+  (sns-roam-test--with-reference-note
+      "The contract runs two years.\n"
+    (sns-roam-insert-element "contract-id"
+                             (sns-roam-test--containing "ontract")
+                             (org-ml-build-paragraph "Notice is 60 days.")
+                             t)
+    (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                           "The contract runs two years.\n\n"
+                           "Notice is 60 days.\n")
+                   (sns-roam-test--text-from-drawer-end file)))))
+
+(ert-deftest sns-roam-insert-element-before-the-first-body-element ()
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n"
+    (sns-roam-insert-element "contract-id"
+                             (sns-roam-test--containing "Edition")
+                             (org-ml-build-paragraph "Vendor: Acme."))
+    (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                           "Vendor: Acme.\n\nEdition: Pro.\n\n"
+                           "Open: renewal date.\n")
+                   (sns-roam-test--text-from-drawer-end file)))))
+
+(ert-deftest sns-roam-insert-element-keeps-extra-space-after-the-anchor ()
+  ;; Slice 10 keeps two blank lines a paragraph asks for; the new
+  ;; paragraph sits one blank line after its anchor and the two follow it.
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\n\nOpen: renewal date.\n"
+    (sns-roam-insert-element "contract-id"
+                             (sns-roam-test--containing "Edition")
+                             (org-ml-build-paragraph "Units: 40.")
+                             t)
+    (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                           "Edition: Pro.\n\nUnits: 40.\n\n\n"
+                           "Open: renewal date.\n")
+                   (sns-roam-test--text-from-drawer-end file)))))
+
+(ert-deftest sns-roam-insert-element-adds-no-blank-line-before-a-headline ()
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n* History\n2026-10-24: offered terms.\n"
+    (sns-roam-insert-element "contract-id"
+                             (sns-roam-test--containing "Edition")
+                             (org-ml-build-paragraph "Units: 40.")
+                             t)
+    (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
+                           "Edition: Pro.\n\nUnits: 40.\n"
+                           "* History\n2026-10-24: offered terms.\n")
+                   (sns-roam-test--text-from-drawer-end file)))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.

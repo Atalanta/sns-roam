@@ -873,6 +873,95 @@ through `sns-roam--update-section'. Returns (:id :file)."
 - *Composes upward.* Merge/split flows are =replace-element= +
   =append-link= + =create-node=, orchestrated by the skill.
 
+* Mutate: insert a body element next to another
+
+Add one element beside an existing body element, and leave every
+other element as it was. A history line in a reference note is the
+usual case. =set-body= would make Claude reproduce every paragraph
+for a one-element change. On 2026-11-10 a rewrite of one paragraph
+dropped a line (issues #8 and #10).
+
+** Contract
+
+- *Input*:
+  - =ID= (string): the roam node UUID. Loud failure if unknown.
+  - =PRED= (function): a unary predicate on an org-ml node. It sees
+    only body elements, never the property drawer or =#+= keywords.
+    It must match *exactly one*; zero or many is a loud error and the
+    file is unchanged.
+  - =NEW-ELEMENT= (org-ml node): the element to add, built via
+    =org-ml-build-*=. Its =:post-blank= is set by the call.
+  - =AFTER= (optional): non-nil inserts after the anchor; nil
+    inserts before it.
+- *Output*: =(:id :file)=.
+- *Side effect*: adds NEW-ELEMENT to the body of ID's file.
+- *Spacing*: one blank line separates the new element from its
+  anchor. The blank lines that followed the pair before the call
+  still follow it, so extra spacing survives, and no blank line
+  appears before a first headline that had none.
+
+** Implementation
+
+A pure transform composed through =sns-roam--update-section=. It
+finds the anchor among the body children. It then maps over the full
+child list, as the warning on =sns-roam--map-children= asks. The
+anchor comes out paired with the new element, and every other child
+comes out unchanged.
+
+#+begin_src emacs-lisp
+(defun sns-roam--insert-beside (children anchor new-element after)
+  "Return CHILDREN with NEW-ELEMENT next to ANCHOR, a member of CHILDREN.
+AFTER non-nil places it after ANCHOR, nil before.  The first of the
+pair takes post-blank 1, and the second takes the post-blank ANCHOR
+had, so the spacing after the pair is what followed ANCHOR before.
+Every other child is returned as it was.  Pure."
+  (let ((anchor-blank (org-ml-get-property :post-blank anchor)))
+    (mapcan (lambda (child)
+              (cond
+               ((not (eq child anchor)) (list child))
+               (after (list (org-ml-set-property :post-blank 1 child)
+                            (org-ml-set-property :post-blank anchor-blank
+                                                 new-element)))
+               (t (list (org-ml-set-property :post-blank 1 new-element)
+                        child))))
+            children)))
+
+(defun sns-roam-insert-element (id pred new-element &optional after)
+  "Insert NEW-ELEMENT beside the unique body element of node ID matching PRED.
+PRED is a unary predicate on an org-ml node and sees only body
+elements, never the property drawer or `#+' keywords.  NEW-ELEMENT
+is a built org-ml node.  AFTER non-nil inserts after the match, nil
+before it.  One blank line separates the two; the blank lines that
+followed the match still follow the pair.  Every other element keeps
+its text.  Errors loudly, leaving the file unchanged, when PRED
+matches zero or many elements or ID is unknown.  Composes through
+`sns-roam--update-section'.  Returns (:id :file)."
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (sns-roam--map-children
+      (lambda (children)
+        (let ((matches (seq-filter
+                        (lambda (child)
+                          (and (not (sns-roam--section-header-p child))
+                               (funcall pred child)))
+                        children)))
+          (unless (= 1 (length matches))
+            (error "sns-roam: insert-element matched %d elements, need exactly 1"
+                   (length matches)))
+          (sns-roam--insert-beside children (car matches) new-element after)))
+      section))))
+#+end_src
+
+** Discipline notes
+
+- *Unique-handle, loud failure.* The error is raised inside the
+  transform, before =org-ml-update-this-buffer= changes the buffer,
+  so nothing is saved.
+- *Additive.* No existing element changes text; only the anchor's
+  =:post-blank= changes when the new element goes after it.
+- *Body only.* Content under a headline is out of reach (issue #2).
+
 * Mutate: set a section-level keyword
 
 Set or replace a =#+KEY: value= keyword in the file's first
