@@ -535,6 +535,13 @@ ALIASES is a list of strings; when non-empty an extra
                                   aliases " "))))
       base)))
 
+(defun sns-roam--registered-file (id)
+  "Return the file the org-roam database holds for node ID, or nil.
+Resolves through `org-roam-node-from-id', as the edit primitives do."
+  (let ((node (org-roam-node-from-id id)))
+    (when node
+      (org-roam-node-file node))))
+
 (defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
@@ -554,8 +561,9 @@ from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
 Indexes the new file in the org-roam database, so the edit
 primitives can resolve the returned ID at once.
-Returns (:id :title :file). Errors if the destination already
-exists, before writing or indexing anything."
+Returns (:id :title :file). Errors before writing anything if the
+destination exists or the database holds ID for another file.
+Errors after indexing if ID does not resolve to the new file."
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
@@ -581,12 +589,26 @@ exists, before writing or indexing anything."
                               "")))
     (when (file-exists-p path)
       (error "sns-roam: refusing to overwrite existing file %s" path))
+    ;; org-roam only warns when it indexes a node whose ID another
+    ;; file already holds, and the ID keeps resolving to that file.
+    ;; Refuse before writing, so a retried batch that reuses a
+    ;; pre-minted ID cannot leave a second file claiming it.
+    (let ((registered (sns-roam--registered-file id)))
+      (when registered
+        (error "sns-roam: id %S already names %s, refusing to create %s"
+               id registered path)))
     (with-temp-buffer
       (insert content)
       (write-region (point-min) (point-max) path nil 'silent))
     ;; The edit primitives look IDs up in the database, so a node
     ;; that is only on disk is unknown to them until it is indexed.
     (org-roam-db-update-file path)
+    ;; Indexing reports some failures only as warnings, so check that
+    ;; the ID now resolves to the new file before reporting success.
+    (let ((registered (sns-roam--registered-file id)))
+      (unless (and registered (file-equal-p registered path))
+        (error "sns-roam: id %S resolves to %s after indexing, not to %s"
+               id registered path)))
     (list :id id :title title :file path)))
 
 (defun sns-roam--meeting-title (series time)

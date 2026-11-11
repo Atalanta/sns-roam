@@ -238,6 +238,42 @@ database and no test touches the owner's slipbox or its database."
         (should-not (org-roam-db-query [:select id :from nodes :where (= id $s1)]
                                        "new-id"))))))
 
+(ert-deftest sns-roam-create-node-refuses-an-id-another-file-holds ()
+  ;; A retried batch can reuse a pre-minted ID with a new timestamped
+  ;; filename.  org-roam only warns on the duplicate, so without this
+  ;; refusal the ID would keep resolving to the earlier file.
+  (sns-roam-test--with-roam-dir
+    (let ((earlier (expand-file-name "earlier.org" org-roam-directory)))
+      (sns-roam-test--register
+       earlier ":PROPERTIES:\n:ID: reused-id\n:END:\n#+title: Earlier note\n")
+      (let ((rows-before (sns-roam-test--all-rows))
+            (files-before (sns-roam-test--org-files)))
+        (let ((err (should-error (sns-roam-create-node "Retried claim"
+                                                       "permanent" nil
+                                                       "reused-id")
+                                 :type 'error)))
+          (should (string-match-p
+                   "\\`sns-roam: id \"reused-id\" already names .*earlier\\.org"
+                   (cadr err))))
+        (should (equal files-before (sns-roam-test--org-files)))
+        (should (equal rows-before (sns-roam-test--all-rows)))
+        (should (file-equal-p earlier
+                              (sns-roam--registered-file "reused-id")))))))
+
+(ert-deftest sns-roam-create-node-fails-when-indexing-does-not-register-the-id ()
+  ;; Indexing can fail with only a warning, so success must come from
+  ;; the ID resolving to the new file, not from the call returning.
+  (sns-roam-test--with-roam-dir
+    (let ((err (cl-letf (((symbol-function 'org-roam-db-update-file)
+                          #'ignore))
+                 (should-error (sns-roam-create-node "Unindexed claim"
+                                                     "permanent" nil
+                                                     "unindexed-id")
+                               :type 'error))))
+      (should (string-match-p
+               "\\`sns-roam: id \"unindexed-id\" resolves to nil after indexing"
+               (cadr err))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.
