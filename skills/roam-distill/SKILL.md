@@ -96,7 +96,46 @@ All elisp written here obeys the Vice Lisp standard (see memory
 - **Exclude the operational.** Tables, names, schedules, tooling choices,
   logistics are reference material, not permanent claims — leave them out
   (or, if the user wants them, capture as a `:KIND: reference` note, not
-  `permanent`).
+  `permanent`; see "Reference and person notes").
+
+---
+
+## Reference and person notes
+
+Operational material goes in reference notes, and people outside
+Ticketmaster and Live Nation go in person notes. Neither is claim-shaped.
+Both follow show, confirm, apply.
+
+### Reference notes (`:KIND: reference`)
+
+- One note per subject, titled by what it is: "Nobl9 contract". Keep dates
+  out of the title, so the note gathers history across renewals.
+- Current state first, in the present tense, updated in place. For a
+  contract: edition, units, annual and unit price, term dates, notice
+  window, and overage rate.
+- Open items next, one line each, so anything still undecided stands out.
+- History last, as dated lines, newest first, each naming its source:
+  "2026-10-24: Nobl9 offered 1-, 2- and 3-year terms (email from Jennifer
+  Tafolla)."
+- No headings. `set-body` and `replace-element` cannot write under a
+  heading, so a flat note stays editable through the API.
+- Name people by name and role. Leave out email signatures and phone
+  numbers; an external contact's details go in their person note.
+- A decision becomes a history line. If its reasoning holds beyond this
+  subject, capture the reasoning as a permanent claim and link it from the
+  reference note.
+
+### Person notes (`:KIND: person`)
+
+- One note for each person outside Ticketmaster and Live Nation, titled
+  with their full name.
+- Body: organisation, role, contact details, and how the user knows them.
+- The person note links to each reference note that involves them, and
+  those notes link back. The no-reciprocal-link rule does not apply to
+  person notes, because a person note indexes where someone appears.
+- People inside Ticketmaster and Live Nation stay as plain names. The
+  company directory holds their details, and Aldi holds their GTD person
+  nodes.
 
 ---
 
@@ -326,7 +365,8 @@ mechanically:
   The primitive does not dedupe; `expand` the FROM note and skip if TO is
   already a forward neighbour.
 - **Do NOT add a reciprocal link.** One-directional only; backlinks cover the
-  reverse. Two physical links is double-maintenance.
+  reverse. Two physical links is double-maintenance. Person notes are the
+  exception; see "Reference and person notes".
 - **Do NOT slice-and-rejoin parsed org-ml node lists** in any transform — map
   the child list whole, filter don't slice (memory `orgml-parsed-node-slice-gotcha`).
 - **Do NOT use `set-body` to change one element.** It replaces the text before
