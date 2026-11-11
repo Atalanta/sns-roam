@@ -173,13 +173,14 @@ Write:
   rewrite one paragraph/claim in place without reproducing the rest of the body.
   Reaches only the text before the first heading.
 - `(sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER)` → `(:id :file)`.
-  Adds NEW-ELEMENT (a built org-ml node) before the single body element
-  matching PRED, or after it when AFTER is non-nil. PRED sees only body
-  elements, never the drawer or `#+` lines. Every other element keeps its
-  text. One blank line separates the new element from its anchor. Zero or
-  many matches is a loud `sns-roam:` error and the file is unchanged. Use to
-  add a history line to a reference note. Reaches only the text before the
-  first heading.
+  Adds NEW-ELEMENT, a paragraph built with `org-ml-build-paragraph`, before
+  the single body element matching PRED, or after it when AFTER is non-nil.
+  PRED sees only body elements, never the drawer or `#+` lines. Every other
+  element keeps its text, and no blank-line gap shrinks. Zero or many
+  matches, a NEW-ELEMENT that is not a paragraph, or a result that would not
+  read back as the planned elements is a loud `sns-roam:` error, and the
+  file is unchanged. Use to add a history line to a reference note. Reaches
+  only the text before the first heading.
 - `(sns-roam-set-property ID KEY VALUE)` (drawer, e.g. `KIND`), `(sns-roam-set-keyword ID KEY VALUE)` (`#+` line, e.g. `TITLE`),
   `(sns-roam-rename ID NEW-TITLE)` → for curation flows (promote, retitle).
 
@@ -338,7 +339,7 @@ to edit the section by hand.
      predicate that matches exactly that element, and the replacement AST).
    - One element being added, rest stays (e.g. a new history line) →
      `insert-element` (build a predicate that matches exactly the neighbour
-     it goes beside, the new element's AST, and AFTER non-nil to go after
+     it goes beside, the new paragraph's AST, and AFTER non-nil to go after
      it). Never `set-body` for this.
    - Text before the first heading being rewritten (e.g. sparse fleeting note
      → full claim) → `set-body`. Headings stay as they are.

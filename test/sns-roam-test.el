@@ -544,8 +544,8 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                    (sns-roam-test--text-from-drawer-end file)))))
 
 (ert-deftest sns-roam-insert-element-keeps-extra-space-after-the-anchor ()
-  ;; Slice 10 keeps two blank lines a paragraph asks for; the new
-  ;; paragraph sits one blank line after its anchor and the two follow it.
+  ;; No gap shrinks: the anchor keeps its two blank lines, and the new
+  ;; paragraph has one before the body element that follows it.
   (sns-roam-test--with-reference-note
       "Edition: Pro.\n\n\nOpen: renewal date.\n"
     (sns-roam-insert-element "contract-id"
@@ -553,9 +553,97 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                              (org-ml-build-paragraph "Units: 40.")
                              t)
     (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
-                           "Edition: Pro.\n\nUnits: 40.\n\n\n"
+                           "Edition: Pro.\n\n\nUnits: 40.\n\n"
                            "Open: renewal date.\n")
                    (sns-roam-test--text-from-drawer-end file)))))
+
+(ert-deftest sns-roam-insert-element-after-a-footnote-keeps-the-three-apart ()
+  ;; Org ends a footnote definition only at two blank lines, so a
+  ;; shrunk gap would pull the new paragraph into the footnote.
+  (sns-roam-test--with-reference-note
+      (concat "Prices follow the list.[fn:1]\n\n"
+              "[fn:1] List price as of 2026.\n\n\n"
+              "Prices are per seat.\n")
+    (sns-roam-insert-element "contract-id"
+                             (lambda (node)
+                               (org-ml-is-type 'footnote-definition node))
+                             (org-ml-build-paragraph "Counts are at renewal.")
+                             t)
+    (let ((elements (plist-get (sns-roam-body-elements "contract-id")
+                               :elements)))
+      (should (equal '(paragraph footnote-definition paragraph paragraph)
+                     (mapcar #'org-ml-get-type elements)))
+      (should (equal '("Counts are at renewal." "Prices are per seat.")
+                     (mapcar #'org-ml-to-trimmed-string (cddr elements)))))))
+
+(ert-deftest sns-roam-insert-element-refuses-a-plain-list ()
+  ;; A list beside a list would merge into one, so only paragraphs go in.
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n"
+    (let ((state-before (sns-roam-test--file-state file))
+          (err (should-error
+                (sns-roam-insert-element
+                 "contract-id"
+                 (sns-roam-test--containing "Edition")
+                 (car (sns-roam--parse-body-elements "- seats\n- users\n"))
+                 t)
+                :type 'error)))
+      (should (equal "sns-roam: insert-element takes a paragraph, not a plain-list"
+                     (cadr err)))
+      (should (equal state-before (sns-roam-test--file-state file))))))
+
+(ert-deftest sns-roam-insert-element-refuses-a-plan-that-would-not-reparse ()
+  ;; A spacing helper that leaves no blank lines makes the new paragraph
+  ;; and its neighbours read back as one, which the check must catch.
+  (sns-roam-test--with-reference-note
+      "Edition: Pro.\n\nOpen: renewal date.\n"
+    (let ((state-before (sns-roam-test--file-state file))
+          (err (cl-letf (((symbol-function 'sns-roam--insert-beside)
+                          (lambda (children anchor new-element _after)
+                            (cl-mapcan
+                             (lambda (child)
+                               (let ((flat (org-ml-set-property
+                                            :post-blank 0 child)))
+                                 (if (eq child anchor)
+                                     (list flat (org-ml-set-property
+                                                 :post-blank 0 new-element))
+                                   (list flat))))
+                             children))))
+                 (should-error
+                  (sns-roam-insert-element "contract-id"
+                                           (sns-roam-test--containing "Edition")
+                                           (org-ml-build-paragraph "Units: 40.")
+                                           t)
+                  :type 'error))))
+      (should (equal (concat "sns-roam: insert-element planned 3 body elements"
+                             " but they read back as 1")
+                     (cadr err)))
+      (should (equal state-before (sns-roam-test--file-state file))))))
+
+(ert-deftest sns-roam-insert-into-section-is-callable-without-a-file ()
+  ;; The calculation from section to section needs no database or file.
+  (let* ((section (car (org-ml-get-children
+                        (with-temp-buffer
+                          (insert sns-roam-test--reference-header
+                                  "Edition: Pro.\n\nOpen: renewal date.\n")
+                          (org-ml-parse-this-buffer)))))
+         (result (sns-roam--insert-into-section
+                  section
+                  (sns-roam-test--containing "Open")
+                  (org-ml-build-paragraph "Units: 40.")
+                  nil)))
+    (should (equal '("Edition: Pro." "Units: 40." "Open: renewal date.")
+                   (mapcar #'org-ml-to-trimmed-string
+                           (seq-remove #'sns-roam--section-header-p
+                                       (org-ml-get-children result)))))
+    (should (equal "sns-roam: insert-element matched 2 elements, need exactly 1"
+                   (cadr (should-error
+                          (sns-roam--insert-into-section
+                           section
+                           (sns-roam-test--containing ".")
+                           (org-ml-build-paragraph "Units: 40.")
+                           nil)
+                          :type 'error))))))
 
 (ert-deftest sns-roam-insert-element-adds-no-blank-line-before-a-headline ()
   (sns-roam-test--with-reference-note

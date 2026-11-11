@@ -444,15 +444,13 @@ through `sns-roam--update-section'. Returns (:id :file)."
 
 (defun sns-roam--insert-beside (children anchor new-element after)
   "Return CHILDREN with NEW-ELEMENT next to ANCHOR, a member of CHILDREN.
-AFTER non-nil places it after ANCHOR, nil before.  The first of the
-pair takes post-blank 1, and the second takes the post-blank ANCHOR
-had, so the spacing after the pair is what followed ANCHOR before.
-That second post-blank is at least 1 when a child follows.  The body
-child in front of an inserted-before pair also gets at least 1.  Org
-joins a paragraph to prose or a table with no blank line between.
-Every other child is returned as it was.  Pure."
-  (let ((anchor-blank (org-ml-get-property :post-blank anchor))
-        (at-least-one (lambda (node)
+AFTER non-nil places it after ANCHOR, nil before.  The child in
+front of NEW-ELEMENT keeps its post-blank, raised to at least 1,
+unless it is header furniture, which is left as it was.  NEW-ELEMENT
+gets post-blank 1 when a child follows it, and otherwise the
+post-blank ANCHOR had.  Every other child is returned as it was.
+Pure."
+  (let ((at-least-one (lambda (node)
                         (org-ml-set-property
                          :post-blank
                          (max 1 (org-ml-get-property :post-blank node))
@@ -461,10 +459,11 @@ Every other child is returned as it was.  Pure."
      (lambda (child next)
        (cond
         ((and (eq child anchor) after)
-         (let ((pair-end (org-ml-set-property :post-blank anchor-blank
-                                              new-element)))
-           (list (org-ml-set-property :post-blank 1 child)
-                 (if next (funcall at-least-one pair-end) pair-end))))
+         (list (funcall at-least-one child)
+               (org-ml-set-property
+                :post-blank
+                (if next 1 (org-ml-get-property :post-blank anchor))
+                new-element)))
         ((eq child anchor)
          (list (org-ml-set-property :post-blank 1 new-element) child))
         ((and (eq next anchor) (not after)
@@ -474,31 +473,66 @@ Every other child is returned as it was.  Pure."
      children
      (append (cdr children) (list nil)))))
 
+(defun sns-roam--body-signature (children)
+  "Return the type and trimmed text of each body element in CHILDREN."
+  (mapcar (lambda (element)
+            (list (org-ml-get-type element)
+                  (org-ml-to-trimmed-string element)))
+          (seq-remove #'sns-roam--section-header-p children)))
+
+(defun sns-roam--check-reparse (section)
+  "Return SECTION if its printed text parses back to the same body.
+Compares the body elements of SECTION with those org reads from
+`org-ml-to-string' of SECTION, by type and trimmed text.  Raises an
+`sns-roam:' error on a mismatch, such as two elements merged by too
+few blank lines.  Pure."
+  (let ((planned  (sns-roam--body-signature (org-ml-get-children section)))
+        (reparsed (sns-roam--body-signature
+                   (sns-roam--parse-body-elements (org-ml-to-string section)))))
+    (unless (equal planned reparsed)
+      (error "sns-roam: insert-element planned %d body elements but they read back as %d"
+             (length planned) (length reparsed)))
+    section))
+
+(defun sns-roam--insert-into-section (section pred new-element after)
+  "Return SECTION with paragraph NEW-ELEMENT beside the body element matching PRED.
+PRED sees only body elements, never the property drawer or `#+'
+keywords, and must match exactly one.  AFTER non-nil places
+NEW-ELEMENT after the match, nil before.  Raises an `sns-roam:' error
+when NEW-ELEMENT is not a paragraph, when PRED matches zero or many
+elements, or when the result would not read back as planned.  Pure."
+  (unless (org-ml-is-type 'paragraph new-element)
+    (error "sns-roam: insert-element takes a paragraph, not a %s"
+           (org-ml-get-type new-element)))
+  (let ((matches (seq-filter
+                  (lambda (child)
+                    (and (not (sns-roam--section-header-p child))
+                         (funcall pred child)))
+                  (org-ml-get-children section))))
+    (unless (= 1 (length matches))
+      (error "sns-roam: insert-element matched %d elements, need exactly 1"
+             (length matches)))
+    (sns-roam--check-reparse
+     (sns-roam--map-children
+      (lambda (children)
+        (sns-roam--insert-beside children (car matches) new-element after))
+      section))))
+
 (defun sns-roam-insert-element (id pred new-element &optional after)
-  "Insert NEW-ELEMENT beside the unique body element of node ID matching PRED.
+  "Insert paragraph NEW-ELEMENT beside the body element of node ID matching PRED.
 PRED is a unary predicate on an org-ml node and sees only body
 elements, never the property drawer or `#+' keywords.  NEW-ELEMENT
-is a built org-ml node.  AFTER non-nil inserts after the match, nil
-before it.  One blank line separates the two; the blank lines that
-followed the match still follow the pair.  Every other element keeps
-its text.  Errors loudly, leaving the file unchanged, when PRED
-matches zero or many elements or ID is unknown.  Composes through
-`sns-roam--update-section'.  Returns (:id :file)."
+is a paragraph built with `org-ml-build-paragraph'.  AFTER non-nil
+inserts after the match, nil before it.  No blank-line gap shrinks,
+and every other element keeps its text.  Errors loudly, leaving the
+file unchanged, when NEW-ELEMENT is not a paragraph, PRED matches
+zero or many elements, the result would not read back as planned,
+or ID is unknown.  Composes through `sns-roam--update-section'.
+Returns (:id :file)."
   (sns-roam--update-section
    id
    (lambda (section)
-     (sns-roam--map-children
-      (lambda (children)
-        (let ((matches (seq-filter
-                        (lambda (child)
-                          (and (not (sns-roam--section-header-p child))
-                               (funcall pred child)))
-                        children)))
-          (unless (= 1 (length matches))
-            (error "sns-roam: insert-element matched %d elements, need exactly 1"
-                   (length matches)))
-          (sns-roam--insert-beside children (car matches) new-element after)))
-      section))))
+     (sns-roam--insert-into-section section pred new-element after))))
 
 (defun sns-roam--upsert-keyword (section key value)
   "Return SECTION with KEY's keyword set to VALUE.
