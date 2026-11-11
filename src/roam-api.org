@@ -1096,6 +1096,21 @@ Resolves through `org-roam-node-from-id', as the edit primitives do."
     (when node
       (org-roam-node-file node))))
 
+(defun sns-roam--separate-body-elements (elements)
+  "Return ELEMENTS with a blank line after each one but the last.
+`org-ml-build-paragraph' gives a paragraph a :post-blank of 0, so
+built paragraphs written in a row share no blank line and org reads
+them as one paragraph. An element that already asks for more blank
+lines keeps them. The last element is left alone, so no blank line
+appears before the first headline, as `sns-roam-set-body' writes it."
+  (append (mapcar (lambda (element)
+                    (org-ml-set-property
+                     :post-blank
+                     (max 1 (org-ml-get-property :post-blank element))
+                     element))
+                  (butlast elements))
+          (last elements)))
+
 (defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
@@ -1134,7 +1149,8 @@ Errors after indexing if ID does not resolve to the new file."
                          (lambda (e) (eq (org-ml-get-type e) 'headline))
                          elements)
                         (length elements)))
-         (section-children (cl-subseq elements 0 split-pos))
+         (section-children (sns-roam--separate-body-elements
+                            (cl-subseq elements 0 split-pos)))
          (sibling-headlines (cl-subseq elements split-pos))
          (section  (apply #'org-ml-build-section
                           (append (list drawer kw) section-children)))

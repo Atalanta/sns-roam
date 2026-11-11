@@ -274,6 +274,67 @@ database and no test touches the owner's slipbox or its database."
                "\\`sns-roam: id \"unindexed-id\" resolves to nil after indexing"
                (cadr err))))))
 
+;;; --- sns-roam-create-node separates paragraphs (slice 10) ---
+
+(defun sns-roam-test--text-from-drawer-end (file)
+  "Return the text of FILE from its first :END: line to the end.
+Comparing from there shows a blank line added after the drawer, after
+#+title or before a headline, as well as the spacing between paragraphs."
+  (let ((text (sns-roam-test--file-text file)))
+    (substring text (string-match "^:END:$" text))))
+
+(ert-deftest sns-roam-create-node-keeps-three-paragraphs-apart ()
+  ;; S10.1.  On 2026-11-09 eight notes came out with their paragraphs on
+  ;; consecutive lines, which org reads as one paragraph (issue #5).
+  (sns-roam-test--with-roam-dir
+    (let* ((created (sns-roam-create-node
+                     "Probe" "permanent"
+                     (list (org-ml-build-paragraph "One.")
+                           (org-ml-build-paragraph "Two.")
+                           (org-ml-build-paragraph "Three."))))
+           (file (plist-get created :file))
+           (text (sns-roam-test--file-text file)))
+      (should (equal ":END:\n#+title: Probe\nOne.\n\nTwo.\n\nThree.\n"
+                     (sns-roam-test--text-from-drawer-end file)))
+      (let ((excerpt (sns-roam-excerpt (plist-get created :id)
+                                       (1+ (string-match "^Two\\.$" text)))))
+        (should (equal "Two." (string-trim (plist-get excerpt :text))))))))
+
+(ert-deftest sns-roam-create-node-keeps-paragraphs-apart-before-a-headline ()
+  ;; S10.2
+  (sns-roam-test--with-roam-dir
+    (let* ((created (sns-roam-create-node
+                     "Probe" "permanent"
+                     (list (org-ml-build-paragraph "One.")
+                           (org-ml-build-paragraph "Two.")
+                           (org-ml-build-headline
+                            :title '("Head")
+                            (org-ml-build-section
+                             (org-ml-build-paragraph "Under."))))))
+           (file (plist-get created :file)))
+      (should (equal ":END:\n#+title: Probe\nOne.\n\nTwo.\n* Head\nUnder.\n"
+                     (sns-roam-test--text-from-drawer-end file))))))
+
+(ert-deftest sns-roam-create-node-keeps-extra-space-a-paragraph-asks-for ()
+  ;; S10.3
+  (sns-roam-test--with-roam-dir
+    (let* ((created (sns-roam-create-node
+                     "Probe" "permanent"
+                     (list (org-ml-build-paragraph :post-blank 2 "One.")
+                           (org-ml-build-paragraph "Two."))))
+           (file (plist-get created :file)))
+      (should (equal ":END:\n#+title: Probe\nOne.\n\n\nTwo.\n"
+                     (sns-roam-test--text-from-drawer-end file))))))
+
+(ert-deftest sns-roam-create-node-writes-a-single-paragraph-unchanged ()
+  (sns-roam-test--with-roam-dir
+    (let* ((created (sns-roam-create-node
+                     "Probe" "permanent"
+                     (list (org-ml-build-paragraph "One."))))
+           (file (plist-get created :file)))
+      (should (equal ":END:\n#+title: Probe\nOne.\n"
+                     (sns-roam-test--text-from-drawer-end file))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.
