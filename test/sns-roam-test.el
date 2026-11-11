@@ -10,14 +10,19 @@
 ;; `org-roam-db-location' defaults to the owner's database.  Setting it
 ;; before org-roam loads means its `defcustom' keeps this value, so the
 ;; default is never the value at any point in the run.
+(defconst sns-roam-test--db-directory
+  (make-temp-file "sns-roam-test-db" t)
+  "Temporary directory that holds the database every test uses.")
 (defconst sns-roam-test--db-location
-  (make-temp-file "sns-roam-test-db" nil ".db")
+  ;; The file must not exist yet: org-roam creates its tables only when
+  ;; it opens a database file that is absent, and treats an empty one as
+  ;; an old version to upgrade.
+  (expand-file-name "org-roam.db" sns-roam-test--db-directory)
   "Temporary database file every test in this run uses.")
 (setq org-roam-db-location sns-roam-test--db-location)
 (add-hook 'kill-emacs-hook
           (lambda ()
-            (when (file-exists-p sns-roam-test--db-location)
-              (delete-file sns-roam-test--db-location))))
+            (delete-directory sns-roam-test--db-directory t)))
 
 (setq package-user-dir (expand-file-name "~/.emacs.d/elpa"))
 (unless (file-directory-p package-user-dir)
@@ -39,13 +44,16 @@
 
 (defmacro sns-roam-test--with-roam-dir (&rest body)
   "Run BODY with `org-roam-directory' set to a fresh temporary directory.
-Closes the database connection and deletes the directory afterwards,
-so no test touches the owner's slipbox or its database."
+Closes the database connection, then deletes the directory and the
+temporary database afterwards, so each test starts with an empty
+database and no test touches the owner's slipbox or its database."
   (declare (indent 0))
   `(let* ((dir (make-temp-file "sns-roam-test" t))
           (org-roam-directory dir))
      (unwind-protect (progn ,@body)
        (org-roam-db--close)
+       (when (file-exists-p sns-roam-test--db-location)
+         (delete-file sns-roam-test--db-location))
        (delete-directory dir t))))
 
 (defun sns-roam-test--kill-file-buffer (file)
