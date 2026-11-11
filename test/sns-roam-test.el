@@ -1592,5 +1592,129 @@ TEXT has no final newline; see `sns-roam-test--with-bare-note'."
         (lambda () (sns-roam-rename "missing-id" "New title"))))
      :id "missing-id")))
 
+;;; --- a note narrowed in Emacs (slice 23) ---
+
+(defconst sns-roam-test--narrowed-note
+  (concat ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Narrowed\n\n"
+          "Top paragraph.\n\n"
+          "* History\n2026-11-06: offered terms.\n")
+  "A note with a paragraph before `* History', the subtree the owner narrows to.")
+
+(defun sns-roam-test--history-subtree (file)
+  "Return (POINT-MIN . POINT-MAX) of a fresh `org-narrow-to-subtree' on `* History'.
+Works in the buffer visiting FILE and leaves its narrowing and point
+as they were."
+  (with-current-buffer (find-file-noselect file)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (re-search-forward "^\\* History$")
+        (org-narrow-to-subtree)
+        (cons (point-min) (point-max))))))
+
+(defun sns-roam-test--narrow-to-history (file)
+  "Narrow the buffer visiting FILE to its `* History' subtree, as the owner would."
+  (with-current-buffer (find-file-noselect file)
+    (goto-char (point-min))
+    (re-search-forward "^\\* History$")
+    (org-narrow-to-subtree)))
+
+(defun sns-roam-test--restriction (file)
+  "Return (POINT-MIN . POINT-MAX) of the buffer visiting FILE."
+  (with-current-buffer (find-file-noselect file)
+    (cons (point-min) (point-max))))
+
+(defun sns-roam-test--should-hold-new-top (file)
+  "Show FILE holds \"New top.\" before `* History', with that subtree unchanged.
+The blank line between them is not checked: an edit of the last body
+element drops it whether or not the note is narrowed."
+  (let ((text (sns-roam-test--file-text file)))
+    (should (string-match-p
+             "^#\\+title: Narrowed\n\nNew top\\.\n\n?\\* History\n2026-11-06: offered terms\\.\n\\'"
+             text))
+    (should-not (string-match-p "Top paragraph" text))))
+
+(ert-deftest sns-roam-body-elements-reads-a-note-narrowed-to-a-subtree ()
+  ;; S23.1.  On 2026-11-11 this note read back with no paragraphs
+  ;; (issue #12).
+  (sns-roam-test--with-bare-note sns-roam-test--narrowed-note
+    (sns-roam-test--narrow-to-history file)
+    (should (equal '("Top paragraph.")
+                   (sns-roam-test--element-texts
+                    (sns-roam-body-elements "bare-id"))))
+    (should (equal (sns-roam-test--history-subtree file)
+                   (sns-roam-test--restriction file)))))
+
+(ert-deftest sns-roam-set-body-edits-a-note-narrowed-to-a-subtree ()
+  ;; On 2026-11-11 this edit was refused as a note with no top-level
+  ;; section (issue #12).
+  (sns-roam-test--with-bare-note sns-roam-test--narrowed-note
+    (sns-roam-test--narrow-to-history file)
+    (sns-roam-set-body "bare-id" "New top.")
+    (sns-roam-test--should-hold-new-top file)
+    (should (equal (sns-roam-test--history-subtree file)
+                   (sns-roam-test--restriction file)))))
+
+(ert-deftest sns-roam-replace-element-edits-a-note-narrowed-to-a-subtree ()
+  ;; S23.2
+  (sns-roam-test--with-bare-note sns-roam-test--narrowed-note
+    (sns-roam-test--narrow-to-history file)
+    (sns-roam-replace-element "bare-id"
+                              (sns-roam-test--containing "Top paragraph.")
+                              (org-ml-build-paragraph "New top."))
+    (sns-roam-test--should-hold-new-top file)
+    (should (equal (sns-roam-test--history-subtree file)
+                   (sns-roam-test--restriction file)))))
+
+(ert-deftest sns-roam-history-anchor-reads-all-of-a-narrowed-history ()
+  ;; Narrowed to the oldest line, the parse would see only that line
+  ;; and place a new newest line before it.
+  (sns-roam-test--with-reference-note sns-roam-test--history-body
+    (let ((region (with-current-buffer (find-file-noselect file)
+                    (goto-char (point-min))
+                    (re-search-forward "^2026-11-06: ")
+                    (narrow-to-region (line-beginning-position) (point-max))
+                    (cons (point-min) (point-max)))))
+      (should (equal '("2026-11-09: asked for a discount (email from the vendor)." nil)
+                     (let ((result (sns-roam-history-anchor "contract-id" "2026-11-12")))
+                       (list (plist-get result :anchor) (plist-get result :after)))))
+      (should (equal region (sns-roam-test--restriction file))))))
+
+(ert-deftest sns-roam-replace-element-refusal-keeps-a-narrowed-note-as-it-was ()
+  ;; Slice 14: a refused edit leaves the buffer and its narrowing alone.
+  (sns-roam-test--with-bare-note
+      (string-replace "Top paragraph.\n"
+                      "Top paragraph.\n\nSecond paragraph.\n"
+                      sns-roam-test--narrowed-note)
+    (sns-roam-test--narrow-to-history file)
+    (let ((restriction (sns-roam-test--restriction file)))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data
+        'sns-roam-match-count
+        (lambda ()
+          (sns-roam-replace-element "bare-id"
+                                    (sns-roam-test--containing " paragraph.")
+                                    (org-ml-build-paragraph "New top."))))
+       :count 2)
+      (should-not (buffer-modified-p (get-file-buffer file)))
+      (should (equal before (sns-roam-test--file-text file)))
+      (should (equal restriction (sns-roam-test--restriction file)))
+      (should (equal (sns-roam-test--history-subtree file) restriction)))))
+
+(ert-deftest sns-roam-replace-element-keeps-a-narrowing-on-the-edited-paragraph ()
+  ;; The narrowing grows with the longer paragraph written in its place.
+  (sns-roam-test--with-bare-note sns-roam-test--narrowed-note
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-min))
+      (re-search-forward "^Top paragraph\\.$")
+      (narrow-to-region (line-beginning-position) (line-end-position)))
+    (sns-roam-replace-element "bare-id"
+                              (sns-roam-test--containing "Top paragraph.")
+                              (org-ml-build-paragraph "A longer new top paragraph."))
+    (should (equal "A longer new top paragraph."
+                   (with-current-buffer (get-file-buffer file)
+                     (string-trim (buffer-string)))))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

@@ -443,6 +443,22 @@ that section's children. Empty STRING yields nil."
            (section (car (org-ml-get-children tree))))
       (if section (org-ml-get-children section) nil))))
 
+(defun sns-roam--edit-section (id file section-fn)
+  "Apply pure SECTION-FN to the first section of the current buffer.
+Parses the buffer as it is narrowed, so the caller widens it first.
+Raises before anything is written when the note of ID in FILE has no
+first section, when SECTION-FN raises, or when the edits would not
+read back as planned.  Returns what `sns-roam--apply-edits' returns."
+  (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
+    (unless (and section (org-ml-is-type 'section section))
+      (sns-roam--signal-malformed-note 'section id file))
+    (let* ((new-section (funcall section-fn section))
+           (edits       (sns-roam--section-edits
+                         (org-ml-get-children section)
+                         (org-ml-get-children new-section))))
+      (sns-roam--check-edits edits new-section file)
+      (sns-roam--apply-edits edits))))
+
 (defun sns-roam--update-section (operation id section-fn)
   "Apply pure SECTION-FN (section -> section) to node ID and save.
 The single write boundary for every mutation of the note's first
@@ -460,15 +476,20 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
       (sns-roam--call-with-context
        (list :id id :file file :operation operation)
        (lambda ()
-         (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
-           (unless (and section (org-ml-is-type 'section section))
-             (sns-roam--signal-malformed-note 'section id file))
-           (let* ((new-section (funcall section-fn section))
-                  (edits       (sns-roam--section-edits
-                                (org-ml-get-children section)
-                                (org-ml-get-children new-section))))
-             (sns-roam--check-edits edits new-section file)
-             (sns-roam--apply-edits edits)))))
+         ;; The owner may have narrowed the note in Emacs.  Parse and
+         ;; edit all of it.  After a refusal, `save-restriction' gives
+         ;; their narrowing back.  After an edit, the narrowing comes
+         ;; from `sns-roam--narrowing-after'.  A marker cannot tell an
+         ;; edit that ends where the narrowing starts from one that
+         ;; starts there.
+         (let* ((narrowing    (when (buffer-narrowed-p)
+                                (cons (point-min) (point-max))))
+                (replacements (save-restriction
+                                (widen)
+                                (sns-roam--edit-section id file section-fn))))
+           (when narrowing
+             (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
+               (narrow-to-region (car bounds) (cdr bounds)))))))
       (save-buffer)
       (list :id id :file file))))
 
@@ -613,18 +634,60 @@ one leaves the positions of those still to come as the parse gave
 them.
 A file need not end with a newline, so an edit that writes after a
 last line without one starts a new line first; otherwise the new
-text would join that line and change what it parses as."
+text would join that line and change what it parses as.
+Returns one (:begin B :end E :new-end N) per edit, in the order made:
+the text from B to E became the text from B to N."
   (save-excursion
-    (dolist (edit edits)
-      (let ((begin (sns-roam--edit-begin edit))
-            (text  (plist-get edit :text)))
-        (delete-region begin (plist-get edit :end))
-        (goto-char begin)
-        (when (and (not (string-empty-p text))
-                   (> begin (point-min))
-                   (not (eq (char-before begin) ?\n)))
-          (insert "\n"))
-        (insert text)))))
+    (mapcar (lambda (edit)
+              (let ((begin (sns-roam--edit-begin edit))
+                    (end   (plist-get edit :end))
+                    (text  (plist-get edit :text)))
+                (delete-region begin end)
+                (goto-char begin)
+                (when (and (not (string-empty-p text))
+                           (> begin (point-min))
+                           (not (eq (char-before begin) ?\n)))
+                  (insert "\n"))
+                (insert text)
+                (list :begin begin :end end :new-end (point))))
+            edits)))
+
+(defun sns-roam--narrowing-start-after (start replacement)
+  "Return where a narrowing that began at START begins after REPLACEMENT.
+A REPLACEMENT from `sns-roam--apply-edits' that ends at or before
+START lies outside the narrowing, so START shifts by the change in
+length.  One that starts at START or covers it is inside the
+narrowing, which then begins where the new text does.  Pure."
+  (let ((begin (plist-get replacement :begin))
+        (end   (plist-get replacement :end)))
+    (cond ((>= start end) (+ start (- (plist-get replacement :new-end) end)))
+          ((> start begin) begin)
+          (t start))))
+
+(defun sns-roam--narrowing-end-after (narrowing-end replacement)
+  "Return where a narrowing that ended at NARROWING-END ends after REPLACEMENT.
+A REPLACEMENT from `sns-roam--apply-edits' that starts at or after
+NARROWING-END lies outside the narrowing and leaves it.  One that
+ends at or before NARROWING-END shifts it by the change in length.
+One that covers it is inside the narrowing, which then ends where
+the new text does.  Pure."
+  (let ((begin   (plist-get replacement :begin))
+        (end     (plist-get replacement :end))
+        (new-end (plist-get replacement :new-end)))
+    (cond ((<= narrowing-end begin) narrowing-end)
+          ((>= narrowing-end end) (+ narrowing-end (- new-end end)))
+          (t new-end))))
+
+(defun sns-roam--narrowing-after (narrowing replacements)
+  "Return NARROWING, a (START . END) cons, after REPLACEMENTS were made.
+REPLACEMENTS are what `sns-roam--apply-edits' returned, in the order
+it made them.  The narrowing covers the same text afterwards, grown
+or shrunk only by what a replacement changed inside it.  Pure."
+  (seq-reduce (lambda (bounds replacement)
+                (cons (sns-roam--narrowing-start-after (car bounds) replacement)
+                      (sns-roam--narrowing-end-after (cdr bounds) replacement)))
+              replacements
+              narrowing))
 
 (defun sns-roam--child-signature (children)
   "Return the type and trimmed printed text of each of CHILDREN.  Pure."
@@ -697,8 +760,11 @@ edits, so unsaved edits are included.  Writes nothing.  Errors
 loudly on an unknown ID."
   (let ((file (sns-roam--node-file-or-error id)))
     (with-current-buffer (find-file-noselect file)
+      ;; Read all of the note, even when the owner has narrowed it.
       (let ((first-child (car (org-ml-get-children
-                               (org-ml-parse-this-buffer)))))
+                               (save-restriction
+                                 (widen)
+                                 (org-ml-parse-this-buffer))))))
         (list :id       id
               :file     file
               :elements (when (org-ml-is-type 'section first-child)
@@ -900,8 +966,12 @@ YYYY-MM-DD, and a note outside the reference layout."
               (sns-roam--call-with-context
                (list :id id :file file)
                (lambda ()
+                 ;; Choose from all of the history, even when the
+                 ;; owner has narrowed the note.
                  (sns-roam--history-anchor-in
-                  (org-ml-get-children (org-ml-parse-this-buffer))
+                  (org-ml-get-children (save-restriction
+                                         (widen)
+                                         (org-ml-parse-this-buffer)))
                   date)))))))
 
 (defun sns-roam--upsert-keyword (section key value)
