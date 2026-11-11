@@ -455,8 +455,10 @@ positions of those still to come as the parse gave them."
 (defun sns-roam-append-link (from-id to-id label before after)
   "Append a relationship paragraph to FROM-ID linking to TO-ID.
 The paragraph reads BEFORE then an inline [[id:TO-ID][LABEL]] link
-then AFTER, and becomes the last body element. Existing content is
-untouched. One-directional; org-roam backlinks give the reverse.
+then AFTER, and becomes the last body element, spaced as
+`sns-roam--insert-beside' spaces an element placed after the last
+child. Existing content is untouched. One-directional; org-roam
+backlinks give the reverse.
 The primitive does NOT dedupe — call it once per intended link.
 Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
   (sns-roam--node-file-or-error to-id)  ; validate target exists, loud
@@ -469,8 +471,10 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
               (lambda (section)
                 (sns-roam--map-children
                  (lambda (children)
-                   (append children
-                           (list (apply #'org-ml-build-paragraph parts))))
+                   (sns-roam--insert-beside children
+                                            (car (last children))
+                                            (apply #'org-ml-build-paragraph parts)
+                                            t))
                  section)))))
     (list :from from-id :to to-id :file (plist-get res :file))))
 

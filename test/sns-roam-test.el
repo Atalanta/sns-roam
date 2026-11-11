@@ -895,11 +895,11 @@ to.  Kills every note buffer afterwards, under its old or new name."
                     before (sns-roam-test--file-text file))))))
 
 (ert-deftest sns-roam-append-link-leaves-the-rest-alone ()
-  ;; S14.2.  The list's blank line already ends it, so the new paragraph
-  ;; is the only line added, straight before `* Notes'.
+  ;; S14.2.  The new paragraph and its blank line go after the source
+  ;; block's blank line, straight before `* Notes'.
   (sns-roam-test--with-typed-note
     (sns-roam-append-link "typed-id" "other-id" "Other" "See " ".")
-    (should (equal '(:removed () :added ("See [[id:other-id][Other]]."))
+    (should (equal '(:removed () :added ("See [[id:other-id][Other]]." ""))
                    (sns-roam-test--changed-lines
                     before (sns-roam-test--file-text file))))))
 
