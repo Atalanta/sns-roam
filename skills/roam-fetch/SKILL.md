@@ -6,9 +6,8 @@ description: |
   Y?", "compare what's in roam about A vs B", "pull up my thinking on
   Z". Runs the four-stage read pipeline (find-by-metadata → body-search
   → expand → excerpt) over the `sns-roam-*` elisp primitives in the
-  user's emacs. Read-only; never mutates the slipbox. Not for the GTD
-  graph (use `aldi-agent-navigator`); not for writes (use `roam-distill`
-  when it exists).
+  user's emacs. Read-only; never mutates the slipbox. Not for writes
+  (use `roam-distill`).
 when_to_use: |
   User asks an information question that the slipbox might answer:
   status of an idea, what's been written about a topic, what notes a
@@ -29,10 +28,8 @@ allowed-tools: Bash, Read, Write
   yet have a precise term for
 
 **Do NOT activate for:**
-- Aldi GTD graph questions — use `aldi-agent-navigator` (different
-  graph, different vocabulary, different command surface)
 - Any mutation request ("rewrite this note", "add a note about X",
-  "merge these two") — hand off to `roam-distill` when it exists, or
+  "merge these two") — hand off to `roam-distill`, or
   decline and surface the user's intent
 
 ---
@@ -342,9 +339,9 @@ is; the concept's introduction tying atomic notes to observability.
   to X" loses.
 - Do NOT embed `[[id:...]]` links in the prose answer. References go
   in the trailer.
-- Do NOT mutate. No file edits, no `sns-roam-set-*`, no `aldi`-anything.
+- Do NOT mutate. No file edits, no `sns-roam-set-*`.
   This skill is read-only. Hand off mutation intent to `roam-distill`
-  (when it exists) or surface the request to the user.
+  or surface the request to the user.
 - Do NOT confuse `:KIND: imported` notes with curated content. They
   may be raw / non-atomic. Note this in synthesis when relevant
   ("the imported note suggests X but hasn't been curated").

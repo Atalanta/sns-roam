@@ -1,18 +1,16 @@
 ---
 name: roam-distill
 description: |
-  Activates at the end of a BWC/BWJ braindump session when the user wants
-  to turn the thinking into durable, claim-shaped permanent notes in their
+  Activates at the end of a thinking or braindump session when the user
+  wants to turn the thinking into durable, claim-shaped permanent notes in their
   org-roam slipbox — "distill this", "capture these as atomic notes",
   "write this up into roam", "make permanent notes from this". Distills a
   transcript into claim-shaped atomic notes, finds existing neighbours via
   the read pipeline, links them, and writes via the `sns-roam-*` elisp
-  primitives. Show → confirm → apply, mirroring `aldi-agent-patcher`.
-  Not for reading (use `roam-fetch`); not for the GTD graph (use
-  `aldi-agent-patcher`).
+  primitives. Show → confirm → apply. Not for reading (use `roam-fetch`).
 when_to_use: |
-  User has done exploratory thinking (a BWC with Claude, or a BWJ dump
-  they paste) and wants the durable ideas captured in the slipbox as
+  User has done exploratory thinking (a conversation with Claude, or
+  notes they paste) and wants the durable ideas captured in the slipbox as
   permanent notes. The unit of output is the claim-shaped atomic note.
   Never auto-write — always show candidates, confirm per-note, then apply.
 allowed-tools: Bash, Read, Write
@@ -22,13 +20,12 @@ allowed-tools: Bash, Read, Write
 
 ## When This Skill Activates
 
-- End of a BWC/BWJ session producing atomic-note candidates
+- End of a thinking session producing atomic-note candidates
 - User pastes a braindump and asks to capture the durable ideas
 - User asks to write up thinking as permanent notes in roam
 
 **Do NOT activate for:**
 - Read questions about the slipbox — use `roam-fetch`
-- GTD graph mutations — use `aldi-agent-patcher` (different graph)
 
 ---
 
@@ -54,14 +51,13 @@ the `-e` wire. Write the script to `/tmp/<task>.el`, have it `prin1` its
 result into `/tmp/<task>.out` with `with-temp-file`, load it with
 `emacsclient -e '(load-file "/tmp/<task>.el")' >/dev/null`, then `cat` the
 `.out`. The `load-file` return value is swallowed — capture to a file, do
-not rely on stdout. (See `feedback-emacsclient-load-file-for-nontrivial-elisp`.)
+not rely on stdout.
 
 ---
 
-## Vice Lisp discipline (non-negotiable)
+## Elisp discipline (non-negotiable)
 
-All elisp written here obeys the Vice Lisp standard (see memory
-`feedback-vice-lisp-discipline`):
+All elisp written here follows these rules:
 
 - **Data over state; pure-ish core, explicit effects at the edge.** Build
   the note body as a *value* (org-ml AST), serialise to string only where
@@ -70,7 +66,6 @@ All elisp written here obeys the Vice Lisp standard (see memory
 - **Mutations named and batched.** Construct everything, then apply.
 - **Loud failure, unique-handle.** Wrap each write in `condition-case` and
   report per-note; never half-write silently.
-- The taste test: *Hickey-proud, Syme-smiling.*
 
 ---
 
@@ -99,10 +94,25 @@ All elisp written here obeys the Vice Lisp standard (see memory
 
 ---
 
+## The user's own conventions
+
+Before the first write, apply the user's own roam conventions from
+their Claude instructions (their CLAUDE.md files or memory). A
+convention can set:
+
+- which organisations count as the user's own, whose people stay as
+  plain names instead of getting person notes;
+- extra phrases or session names that should start this skill.
+
+With no conventions, give every named person outside the user a
+person note, and ask the user when you are unsure.
+
+---
+
 ## Reference and person notes
 
-Operational material goes in reference notes, and people outside
-Ticketmaster and Live Nation go in person notes. Neither is claim-shaped.
+Operational material goes in reference notes, and people outside the
+user's own organisations go in person notes. Neither is claim-shaped.
 Both follow show, confirm, apply.
 
 ### Reference notes (`:KIND: reference`)
@@ -192,15 +202,15 @@ note file, and never place the line yourself or rewrite the body with
 
 ### Person notes (`:KIND: person`)
 
-- One note for each person outside Ticketmaster and Live Nation, titled
+- One note for each person outside the user's own organisations, titled
   with their full name.
 - Body: organisation, role, contact details, and how the user knows them.
 - The person note links to each reference note that involves them, and
   those notes link back. The no-reciprocal-link rule does not apply to
   person notes, because a person note indexes where someone appears.
-- People inside Ticketmaster and Live Nation stay as plain names. The
-  company directory holds their details, and Aldi holds their GTD person
-  nodes.
+- People inside the user's own organisations stay as plain names. Which
+  organisations those are is one of the user's conventions (see "The
+  user's own conventions").
 
 ---
 
@@ -276,7 +286,7 @@ or reconciliation dies with `number-or-marker-p`.
 
 This skill has two flows; pick by intent:
 
-- **Draft** — turn a BWC/BWJ transcript into new claim notes (below).
+- **Draft** — turn a session transcript into new claim notes (below).
 - **Link** — connect notes that already exist when you spot a connection
   (see "The link flow"). The core Zettelkasten act; value accretes here over
   time as much as in drafting.
@@ -335,13 +345,13 @@ One stage at a time. Show before write.
 New notes are safe to delete — until a *later* session links into them,
 nothing else references them. If a write batch is wrong, delete the files
 in the slipbox and re-run. There is no partial-graph corruption risk for a
-fresh cluster (unlike the GTD graph's open-next invariant).
+fresh cluster.
 
 ---
 
 ## Worked Example (the first real run, 2026-06-06)
 
-User pasted a BWJ "One-to-One Operating Model" dump.
+User pasted a "One-to-One Operating Model" braindump.
 
 1. **Distill** → 6 claim-shaped notes (e.g. "A one-to-one is a leadership
    conversation, not a reporting mechanism"; "Leadership happens through
@@ -502,7 +512,6 @@ mechanically:
   `sns-roam-*` primitives (literate source).
 - The `roam-fetch` skill: the read sibling; reuse its pipeline for the
   neighbour-finding step.
-- Memory `feedback-vice-lisp-discipline` — the elisp craft standard.
 
 ---
 
