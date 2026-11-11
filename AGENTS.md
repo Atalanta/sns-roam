@@ -27,3 +27,16 @@ An Emacs Lisp bridge between Claude and an org-roam slipbox. It has read primiti
 - The skills in `~/.claude/skills` are links to `skills/` in this checkout.
 - After changing `lisp/`, reload it in the running Emacs: `emacsclient -e '(load-library "sns-roam-api")'`.
 - The history of `src/roam-api.org` comes from `~/.emacs.d`. Old copies there, in `roam-api.org`, `roam-import.org` and `sns-emacs-modules/`, are unused.
+
+## Turnstile setup in a fresh clone
+
+Git does not commit its config, so set these once per clone:
+
+```sh
+git config turnstile.lenses clojure
+git config turnstile.check 'mise run check && mise run test'
+git config turnstile.base main
+git config turnstile.worker 'claude -p --output-format json --permission-mode acceptEdits --no-session-persistence --allowedTools "Bash(mise run tangle)" "Bash(mise run test)" "Bash(mise run check)" "Bash(emacs --batch *)" "Bash(git diff *)" "Bash(git status *)" "Bash(git log *)"'
+```
+
+The worker's allowed tools let it tangle and run the tests, and nothing else in the shell. `turnstile land` opens merge requests with `glab`, which fails on this GitHub repository, so a change that passes the review and the check reaches `main` by a fast-forward merge and a push.
