@@ -335,6 +335,108 @@ Comparing from there shows a blank line added after the drawer, after
       (should (equal ":END:\n#+title: Probe\nOne.\n"
                      (sns-roam-test--text-from-drawer-end file))))))
 
+;;; --- sns-roam-body-elements (slice 11) ---
+
+(defun sns-roam-test--file-state (file)
+  "Return FILE's bytes and modification time, to show a call left it alone."
+  (list (with-temp-buffer
+          (insert-file-contents-literally file)
+          (buffer-string))
+        (file-attribute-modification-time (file-attributes file))))
+
+(defun sns-roam-test--element-texts (result)
+  "Return the trimmed org text of each element in RESULT's :elements."
+  (mapcar #'org-ml-to-trimmed-string (plist-get result :elements)))
+
+(ert-deftest sns-roam-body-elements-returns-the-paragraphs-before-the-first-headline ()
+  ;; S11.1.  On 2026-11-09 the only way to get a note's paragraphs was to
+  ;; read its file and split on blank lines (issue #7).
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "reference.org" org-roam-directory)))
+      (sns-roam-test--register
+       file
+       (concat ":PROPERTIES:\n:ID: reference-id\n:KIND: reference\n:END:\n"
+               "#+title: Nobl9 contract\n#+filetags: :vendor:\n\n"
+               "Current edition is Enterprise.\n\n"
+               "Annual price is fixed for the term.\n\n"
+               "Notice window is 60 days.\n\n"
+               "* History\n2026-10-24: three terms offered.\n"))
+      (unwind-protect
+          (let* ((state-before (sns-roam-test--file-state file))
+                 (result (sns-roam-body-elements "reference-id")))
+            (should (equal "reference-id" (plist-get result :id)))
+            (should (equal file (plist-get result :file)))
+            (should (equal '("Current edition is Enterprise."
+                             "Annual price is fixed for the term."
+                             "Notice window is 60 days.")
+                           (sns-roam-test--element-texts result)))
+            (should (equal state-before (sns-roam-test--file-state file))))
+        (sns-roam-test--kill-file-buffer file)))))
+
+(ert-deftest sns-roam-body-elements-shows-unsaved-edits ()
+  ;; S11.2.  The edit that follows acts on the buffer, so the text shown
+  ;; as the before text must come from the buffer too.
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "priced.org" org-roam-directory)))
+      (let ((coding-system-for-write 'utf-8))
+        (sns-roam-test--register
+         file
+         (concat ":PROPERTIES:\n:ID: priced-id\n:END:\n#+title: Priced\n\n"
+                 "The unit price is £100.\n\nThe term is one year.\n")))
+      (let ((buffer (find-file-noselect file)))
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer
+                (goto-char (point-min))
+                (search-forward "£100")
+                (replace-match "£120" t t))
+              (let* ((state-before (sns-roam-test--file-state file))
+                     (result (sns-roam-body-elements "priced-id")))
+                (should (equal '("The unit price is £120."
+                                 "The term is one year.")
+                               (sns-roam-test--element-texts result)))
+                (should (equal state-before (sns-roam-test--file-state file)))
+                (with-current-buffer buffer
+                  (should (buffer-modified-p))
+                  (should (string-match-p "£120" (buffer-string))))))
+          ;; Clear the flag so killing the buffer does not ask to save it.
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer))))))
+
+(ert-deftest sns-roam-body-elements-returns-nil-for-a-note-with-no-body ()
+  ;; S11.3
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "bare.org" org-roam-directory)))
+      (sns-roam-test--register
+       file ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n")
+      (unwind-protect
+          (let ((result (sns-roam-body-elements "bare-id")))
+            (should (equal "bare-id" (plist-get result :id)))
+            (should (equal file (plist-get result :file)))
+            (should (null (plist-get result :elements))))
+        (sns-roam-test--kill-file-buffer file)))))
+
+(ert-deftest sns-roam-body-elements-reads-back-what-create-node-wrote ()
+  (sns-roam-test--with-roam-dir
+    (let* ((body (sns-roam--parse-body-elements
+                  "A claim stated plainly.\n\n- first ground\n- second ground\n"))
+           (created (sns-roam-create-node "Probe" "permanent" body))
+           (file (plist-get created :file)))
+      (unwind-protect
+          (should (equal '("A claim stated plainly."
+                           "- first ground\n- second ground")
+                         (sns-roam-test--element-texts
+                          (sns-roam-body-elements (plist-get created :id)))))
+        (sns-roam-test--kill-file-buffer file)))))
+
+(ert-deftest sns-roam-body-elements-rejects-an-unknown-id ()
+  (sns-roam-test--with-roam-dir
+    (let ((err (should-error (sns-roam-body-elements "missing-id")
+                             :type 'error)))
+      (should (equal "sns-roam: no roam node with id \"missing-id\""
+                     (cadr err))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.

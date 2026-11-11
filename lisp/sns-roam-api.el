@@ -403,6 +403,28 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
                  section)))))
     (list :from from-id :to to-id :file (plist-get res :file))))
 
+(defun sns-roam-body-elements (id)
+  "Return the body elements before the first heading of roam node ID.
+
+Returns:
+  (:id ID :file FILE :elements NODES)
+
+NODES are the parsed org-ml children of the note's first section,
+without the property drawer and `#+' keywords, in buffer order; nil
+when there is no such body.  The note is parsed from the buffer
+`find-file-noselect' returns, the one `sns-roam--update-section'
+edits, so unsaved edits are included.  Writes nothing.  Errors
+loudly on an unknown ID."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (let ((first-child (car (org-ml-get-children
+                               (org-ml-parse-this-buffer)))))
+        (list :id       id
+              :file     file
+              :elements (when (org-ml-is-type 'section first-child)
+                          (seq-remove #'sns-roam--section-header-p
+                                      (org-ml-get-children first-child))))))))
+
 (defun sns-roam-replace-element (id pred new-element)
   "Replace the unique body element of node ID matching PRED with NEW-ELEMENT.
 PRED is a unary predicate on an org-ml node; NEW-ELEMENT is a built

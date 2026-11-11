@@ -752,6 +752,69 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
   bidirectional variant (for symmetric relations like "contradicts")
   would be a separate, explicit primitive.
 
+* Read: the body elements of a node
+
+Return the body elements before a note's first heading, as parsed
+org-ml nodes, so Claude can show the text an edit will replace. The
+roam-distill transform flow calls this before =replace-element= or
+=set-body=. Reading the file and splitting on blank lines guesses at
+paragraph boundaries that org decides (issue #7).
+
+** Contract
+
+- *Input*: =ID= (string), the roam node UUID. Loud failure if
+  unknown.
+- *Output*: plist =(:id ID :file FILE :elements NODES)=.
+  - =:elements=: the section's children with the header furniture
+    (property drawer, =#+= keywords) removed, in buffer order. Nil
+    when the note has no body before its first heading, or when the
+    file opens straight onto a heading.
+- *Side effect*: none on disk. The file is visited with
+  =find-file-noselect=, as =sns-roam--update-section= visits it, so a
+  buffer the owner has open is parsed with its unsaved edits, and the
+  text returned is the text the following edit acts on. Nothing is
+  saved and the buffer's modified flag is left as it was.
+
+** Implementation
+
+The read mirrors the write boundary: same ID resolution, same buffer,
+same header predicate. It filters the child list whole, as the
+warning on =sns-roam--map-children= asks.
+
+#+begin_src emacs-lisp
+(defun sns-roam-body-elements (id)
+  "Return the body elements before the first heading of roam node ID.
+
+Returns:
+  (:id ID :file FILE :elements NODES)
+
+NODES are the parsed org-ml children of the note's first section,
+without the property drawer and `#+' keywords, in buffer order; nil
+when there is no such body.  The note is parsed from the buffer
+`find-file-noselect' returns, the one `sns-roam--update-section'
+edits, so unsaved edits are included.  Writes nothing.  Errors
+loudly on an unknown ID."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (let ((first-child (car (org-ml-get-children
+                               (org-ml-parse-this-buffer)))))
+        (list :id       id
+              :file     file
+              :elements (when (org-ml-is-type 'section first-child)
+                          (seq-remove #'sns-roam--section-header-p
+                                      (org-ml-get-children first-child))))))))
+#+end_src
+
+** Discipline notes
+
+- *Same buffer as the write.* Reading the file from disk would show
+  the saved text while =update-section= edits the buffer, so the
+  before text shown to the owner could differ from what the edit
+  replaces.
+- *Nodes, not strings.* The caller serialises with
+  =org-ml-to-trimmed-string= where it shows them, and can build a
+  =replace-element= predicate from the same nodes.
+
 * Mutate: replace a body element
 
 Surgically replace one body element — rewrite a claim's paragraph,

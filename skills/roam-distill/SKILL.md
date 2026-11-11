@@ -145,6 +145,10 @@ Read (for finding link targets — reuse the `roam-fetch` pipeline):
 - `(sns-roam-find-by-metadata QUERY)` — seed existing notes by title/alias/tag.
 - `(sns-roam-body-search QUERY)` — seed by body text when metadata misses.
 - `(sns-roam-expand ID)` — one-hop subgraph to see a candidate's neighbourhood.
+- `(sns-roam-body-elements ID)` → `(:id :file :elements)`. The org-ml nodes
+  before the note's first heading, without the drawer and `#+` lines, read
+  from the buffer the next edit acts on, unsaved edits included. Writes
+  nothing. `:elements` is nil when there is no body before the first heading.
 
 Write:
 - `(sns-roam-create-node TITLE KIND &optional ELEMENTS ID ALIASES CREATED-TIME)`
@@ -315,7 +319,12 @@ single element, or `set-body` to rewrite the text before the first heading.
 Neither reaches a heading or the content under one; for those, tell the owner
 to edit the section by hand.
 
-1. **Read the note.** Fetch the current body; identify the element to change.
+1. **Read the note.** Fetch the body with `(sns-roam-body-elements ID)`,
+   never by reading the file. With the file-and-load idiom, the script writes
+   `(mapcar #'org-ml-to-trimmed-string (plist-get result :elements))` to the
+   `.out` file. Show those strings, in order, as the before text, and identify
+   the element to change. If `:elements` is nil, tell the owner the note has
+   no paragraphs before its first headline, and stop.
 2. **Choose the tool.**
    - One paragraph/element changing, rest stays → `replace-element` (build a
      predicate that matches exactly that element, and the replacement AST).
