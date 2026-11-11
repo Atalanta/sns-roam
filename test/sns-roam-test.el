@@ -437,6 +437,104 @@ Comparing from there shows a blank line added after the drawer, after
       (should (equal "sns-roam: no roam node with id \"missing-id\""
                      (cadr err))))))
 
+;;; --- a note whose file has moved (slice 20) ---
+
+(defmacro sns-roam-test--with-moved-note (&rest body)
+  "Run BODY with a created note's file renamed after it was indexed.
+Binds `id' to the note's ID, `old-file' to the path the database
+still holds and `new-file' to where the file now is.  The database is
+not synced after the rename, as when the user moves a note outside
+Emacs.  Kills any buffer on either path afterwards."
+  (declare (indent 0))
+  `(sns-roam-test--with-roam-dir
+     (let* ((created (sns-roam-create-node
+                      "Tide tables" "permanent"
+                      (sns-roam--parse-body-elements "High water is at noon.\n")))
+            (id (plist-get created :id))
+            (old-file (plist-get created :file))
+            (new-file (expand-file-name "moved-tide-tables.org"
+                                        org-roam-directory)))
+       (sns-roam-test--kill-file-buffer old-file)
+       (rename-file old-file new-file)
+       (unwind-protect (progn ,@body)
+         (sns-roam-test--kill-file-buffer old-file)
+         (sns-roam-test--kill-file-buffer new-file)))))
+
+(defun sns-roam-test--should-report-missing-file (id old-file thunk)
+  "Show that calling THUNK raises the missing-file error for ID's OLD-FILE.
+Also shows the call opened no buffer on OLD-FILE and left no file
+there."
+  (let ((err (should-error (funcall thunk) :type 'error)))
+    (should (equal (format "sns-roam: node %s's file %s does not exist"
+                           id old-file)
+                   (cadr err))))
+  (should-not (get-file-buffer old-file))
+  (should-not (file-exists-p old-file)))
+
+(ert-deftest sns-roam-body-elements-reports-a-moved-file ()
+  ;; S20.1.  On 2026-11-11 this returned `:elements nil' for a renamed
+  ;; note, as if it were empty (issue #13).
+  (sns-roam-test--with-moved-note
+    (sns-roam-test--should-report-missing-file
+     id old-file (lambda () (sns-roam-body-elements id)))))
+
+(ert-deftest sns-roam-expand-reports-a-moved-file ()
+  ;; S20.1
+  (sns-roam-test--with-moved-note
+    (sns-roam-test--should-report-missing-file
+     id old-file (lambda () (sns-roam-expand id)))))
+
+(ert-deftest sns-roam-set-body-reports-a-moved-file ()
+  ;; S20.2.  On 2026-11-11 this raised "has no top-level section", which
+  ;; names a malformed file (issue #13).
+  (sns-roam-test--with-moved-note
+    (sns-roam-test--should-report-missing-file
+     id old-file (lambda () (sns-roam-set-body id "Low water is at six.")))
+    (should (string-match-p "^High water is at noon\\.$"
+                            (sns-roam-test--file-text new-file)))))
+
+(ert-deftest sns-roam-set-property-reports-a-moved-file ()
+  ;; S20.2
+  (sns-roam-test--with-moved-note
+    (sns-roam-test--should-report-missing-file
+     id old-file (lambda () (sns-roam-set-property id "KIND" "reference")))))
+
+(ert-deftest sns-roam-moved-file-leaves-an-open-buffer-alone ()
+  ;; S20.2.  A buffer the user already has on the old path may hold
+  ;; unsaved edits, so the error must not touch it.
+  (sns-roam-test--with-roam-dir
+    (let* ((created (sns-roam-create-node
+                     "Tide tables" "permanent"
+                     (sns-roam--parse-body-elements "High water is at noon.\n")))
+           (id (plist-get created :id))
+           (old-file (plist-get created :file))
+           (new-file (expand-file-name "moved-tide-tables.org"
+                                       org-roam-directory))
+           (buffer (find-file-noselect old-file)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (search-forward "noon")
+              (replace-match "one" t t))
+            (rename-file old-file new-file)
+            (let ((err (should-error (sns-roam-set-body id "Low water is at six.")
+                                     :type 'error)))
+              (should (equal (format "sns-roam: node %s's file %s does not exist"
+                                     id old-file)
+                             (cadr err))))
+            (should (eq buffer (get-file-buffer old-file)))
+            (with-current-buffer buffer
+              (should (buffer-modified-p))
+              (should (string-match-p "^High water is at one\\.$"
+                                      (buffer-string))))
+            (should-not (file-exists-p old-file)))
+        ;; Clear the flag so killing the buffer does not ask to save it.
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer)
+        (sns-roam-test--kill-file-buffer new-file)))))
+
 ;;; --- sns-roam-insert-element (slice 12) ---
 
 (defconst sns-roam-test--reference-header

@@ -534,6 +534,7 @@ emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbo
   `org-roam-db-autosync-mode`), then ask again. With `:files 0` the
   slipbox is empty, which is fine: there is nothing to find yet, and
   new notes can still be written.
+- A later call fails with `sns-roam: node ID's file PATH does not exist`: the note's file moved after org-roam last synced. Stop, tell the user PATH is missing, and ask them to run `M-x org-roam-db-sync`, then ask again.
 - `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
   tell the user to install it, then ask again:
 

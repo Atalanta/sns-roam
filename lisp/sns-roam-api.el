@@ -117,8 +117,11 @@ node) are skipped silently. Empty list on no match."
 
 (defun sns-roam--forward-link-edges (source-node)
   "Return a list of forward-link edge plists from SOURCE-NODE.
-Only =id:= links count; fuzzy and external links are skipped."
-  (let* ((file   (org-roam-node-file source-node))
+Only =id:= links count; fuzzy and external links are skipped.
+Loud failure if SOURCE-NODE's file has moved since the last sync."
+  (let* ((file   (sns-roam--existing-file-or-error
+                  (org-roam-node-id source-node)
+                  (org-roam-node-file source-node)))
          (parsed (with-temp-buffer
                    (insert-file-contents file)
                    (org-mode)
@@ -243,13 +246,27 @@ a property drawer — fix the upstream caller."
 
 (require 'org-ml)
 
+(defun sns-roam--existing-file-or-error (id file)
+  "Return FILE, the path the database holds for roam node ID, if it exists.
+Signal an error otherwise.  The file goes missing when the user moves
+or deletes it and has not run `org-roam-db-sync' since.  The check
+runs before any buffer is visited.  So no call opens a buffer on the
+missing path or saves a new file there.  A buffer the user already has
+open on it keeps its unsaved edits (issue #13)."
+  (unless (file-exists-p file)
+    ;; `error' would curl the apostrophe; Claude and the tests read the
+    ;; message as typed.
+    (error "%s" (format "sns-roam: node %s's file %s does not exist" id file)))
+  file)
+
 (defun sns-roam--node-file-or-error (id)
   "Return the file path for roam node ID, or signal an error.
-Loud failure on unknown ID — never returns nil."
+Loud failure on an unknown ID, and on a file that has moved since the
+last sync.  Never returns nil."
   (let ((node (org-roam-node-from-id id)))
     (unless node
       (error "sns-roam: no roam node with id %S" id))
-    (org-roam-node-file node)))
+    (sns-roam--existing-file-or-error id (org-roam-node-file node))))
 
 (defun sns-roam--upsert-node-property (drawer key value)
   "Return DRAWER with KEY set to VALUE.
