@@ -388,7 +388,7 @@ through `emacsclient`. Before the first call in a session, load the API
 and ask where the slipbox is:
 
 ```sh
-emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory :indexed (length (org-roam-node-list)) :files (length (directory-files-recursively org-roam-directory "\\.org\\'"))) (list :loaded nil))'
+emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory :indexed (length (org-roam-node-list)) :files (length (directory-files-recursively org-roam-directory "\\.org$"))) (list :loaded nil))'
 ```
 
 - `(:loaded t :slipbox DIR :indexed N :files F)`: the API is loaded,
