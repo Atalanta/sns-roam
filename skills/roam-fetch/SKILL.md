@@ -70,7 +70,7 @@ and similar. Instead:
 
 Two files: input script, output buffer. Never escape on both ends.
 This is the canonical idiom for any non-trivial elisp work in this
-emacs — see memory `feedback-emacsclient-load-file-for-nontrivial-elisp`.
+emacs.
 </file_and_load>
 
 For a single quick call where you're certain the output is short and
@@ -83,8 +83,9 @@ file-and-load.
 ## Mental Model of the Slipbox
 
 <slipbox_model>
-The slipbox is `~/roam/`, a directory of `.org` files, one node per
-file. Every node has:
+The slipbox is the directory in `org-roam-directory` in the user's
+running Emacs, which the load step reports. It holds `.org` files, one
+node per file. Every node has:
 
 - A `:PROPERTIES:` drawer with `:ID:` (UUID), `:CREATED:`, `:KIND:`,
   optional `:ROAM_ALIASES:`.
@@ -118,8 +119,8 @@ file. Every node has:
 
 ## The Four Primitives
 
-All four live in `~/Developer/sns-roam/src/roam-api.org` (literate source; tangles to
-`lisp/sns-roam-api.el`). All return plists. All carry
+All four are in `src/roam-api.org` in the sns-roam repository
+(literate source; tangles to `lisp/sns-roam-api.el`). All return plists. All carry
 provenance (`:id`, `:file`, `:point` where applicable).
 
 ### 1. `(sns-roam-find-by-metadata QUERY)` — seed by metadata
@@ -373,29 +374,34 @@ is; the concept's introduction tying atomic notes to observability.
 
 ## Reference
 
-- **Primitives source:** `~/Developer/sns-roam/src/roam-api.org` (literate; tangles
-  to `lisp/sns-roam-api.el`).
-- **Design memo:** memory `roam-claude-design` — the locked design
-  rules. Plist returns, graph-not-text, provenance everywhere.
-- **Citation format:** memory `roam-fetch-citation-format` — EA-style
-  prose + "Note references:" trailer.
-- **File-and-load idiom:** memory
-  `feedback-emacsclient-load-file-for-nontrivial-elisp` — the
-  canonical pattern, including the both-ends defence (input AND
-  output may be shell-hostile).
-- **Slipbox location:** `~/roam/`; `org-roam-directory` in emacs.
+- **Primitives source:** `src/roam-api.org` in
+  <https://github.com/Atalanta/sns-roam> (literate; tangles to
+  `lisp/sns-roam-api.el`).
+- **Slipbox location:** `org-roam-directory`, which the load step reports.
 
 ---
 
-## Loading the modules (if not already loaded)
+## Loading the API
 
-If `sns-roam-find-by-metadata` is unbound, the modules haven't been
-loaded into the running emacs. Reload:
+The skill calls the `sns-roam-*` functions in the user's running Emacs
+through `emacsclient`. Before the first call in a session, load the API
+and ask where the slipbox is:
 
 ```sh
-emacsclient -e '(load-file "~/Developer/sns-roam/lisp/sns-roam-api.el")'
+emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory) (list :loaded nil))'
 ```
 
-This is a one-shot fix; subsequent calls in the same session find the
-primitives bound. (Eventually the modules will be `(require)`'d in
-`init.el` and survive emacs restart; that wiring is open work.)
+- `(:loaded t :slipbox DIR)`: the API is loaded and DIR is the slipbox.
+  Name DIR when you report where you looked.
+- `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
+  tell the user to install it, then ask again:
+
+  ```elisp
+  (package-vc-install '(sns-roam-api :url "https://github.com/Atalanta/sns-roam"))
+  ```
+
+  A user working from a checkout adds its `lisp/` directory to
+  `load-path` instead.
+
+`require` loads the library once per Emacs session. After the library
+changes, reload it with `(load-library "sns-roam-api")` or restart Emacs.

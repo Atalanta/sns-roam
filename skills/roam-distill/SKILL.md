@@ -265,7 +265,7 @@ children. A link is `(org-ml-build-link (concat "id:" TARGET-ID) LABEL)`,
 which serialises to `[[id:TARGET-ID][LABEL]]`. Weave the link into the
 prose sentence that states the *relationship* ("This refines [[...]] by…").
 
-**org-ml hazard (see memory `orgml-parsed-node-slice-gotcha`):** when a
+**org-ml hazard:** when a
 transform touches a *parsed* note's children, map the child list whole and
 filter — never slice into header/body sublists and re-`append` parsed nodes,
 or reconciliation dies with `number-or-marker-p`.
@@ -334,7 +334,7 @@ One stage at a time. Show before write.
 
 New notes are safe to delete — until a *later* session links into them,
 nothing else references them. If a write batch is wrong, delete the files
-in `~/roam/` and re-run. There is no partial-graph corruption risk for a
+in the slipbox and re-run. There is no partial-graph corruption risk for a
 fresh cluster (unlike the GTD graph's open-next invariant).
 
 ---
@@ -462,7 +462,7 @@ mechanically:
   reverse. Two physical links is double-maintenance. Person notes are the
   exception; see "Reference and person notes".
 - **Do NOT slice-and-rejoin parsed org-ml node lists** in any transform — map
-  the child list whole, filter don't slice (memory `orgml-parsed-node-slice-gotcha`).
+  the child list whole, filter don't slice.
 - **Do NOT use `set-body` to change one element.** It replaces the text before
   the first heading, so you must reproduce everything you keep there and risk
   dropping content/links. Use `replace-element` with a narrow predicate.
@@ -473,7 +473,7 @@ mechanically:
   don't work around it.
 - **Do NOT drop existing `[[id:]]` links when rewriting an element.** Reproduce
   them in the replacement AST unless the edit deliberately removes them.
-- **Do NOT editorialise the user's claims** (memory `feedback-write-tersely`).
+- **Do NOT editorialise the user's claims.**
   No rhetorical flourish in note bodies; state the claim and its support
   plainly. Banned: `load-bearing`, `the shape of X`, "the moment they matter
   most". The claims are the user's, not yours to embellish.
@@ -498,21 +498,38 @@ mechanically:
 
 ## Reference
 
-- `~/Developer/sns-roam/src/roam-api.org` — the `sns-roam-*` primitives (literate source).
-- `~/.claude/skills/roam-fetch/SKILL.md` — the read sibling; reuse its
-  pipeline for the neighbour-finding step.
-- Memory `roam-claude-design` — locked design rules (graph-not-text, plist
-  returns, unique-handle writes, loud failure).
+- `src/roam-api.org` in <https://github.com/Atalanta/sns-roam>: the
+  `sns-roam-*` primitives (literate source).
+- The `roam-fetch` skill: the read sibling; reuse its pipeline for the
+  neighbour-finding step.
 - Memory `feedback-vice-lisp-discipline` — the elisp craft standard.
-- Memory `roam-integration-arc` — the broader programme and skill boundaries.
 
 ---
 
-## Loading the modules (if not already loaded)
+## Loading the API
+
+The skill calls the `sns-roam-*` functions in the user's running Emacs
+through `emacsclient`. Before the first call in a session, load the API
+and ask where the slipbox is:
 
 ```sh
-emacsclient -e '(load-file "~/Developer/sns-roam/lisp/sns-roam-api.el")'
+emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory) (list :loaded nil))'
 ```
 
-Confirm primitives are present before composing:
-`(mapcar #'fboundp '(sns-roam-create-node sns-roam-find-by-metadata))`.
+- `(:loaded t :slipbox DIR)`: the API is loaded and DIR is the slipbox.
+  Name DIR when you report where you looked.
+- `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
+  tell the user to install it, then ask again:
+
+  ```elisp
+  (package-vc-install '(sns-roam-api :url "https://github.com/Atalanta/sns-roam"))
+  ```
+
+  A user working from a checkout adds its `lisp/` directory to
+  `load-path` instead.
+
+`require` loads the library once per Emacs session. After the library
+changes, reload it with `(load-library "sns-roam-api")` or restart Emacs.
+
+Confirm the write primitives are present before composing:
+`(mapcar #'fboundp '(sns-roam-create-node sns-roam-insert-element))`.
