@@ -397,7 +397,16 @@ emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbo
   `org-roam-db-autosync-mode`), then ask again. With `:files 0` the
   slipbox is empty, which is fine: there is nothing to find yet, and
   new notes can still be written.
-- A later call fails with `sns-roam: node ID's file PATH does not exist`: the note's file moved after org-roam last synced. Stop, tell the user PATH is missing, and ask them to run `M-x org-roam-db-sync`, then ask again.
+- A later call fails. Every sns-roam failure prints its data after the
+  message, a plist that starts with `:kind`. Act on `:kind` and the
+  other keys, never on the wording:
+  - `:kind sns-roam-missing-file`: the note's file moved after org-roam
+    last synced, and `:path` is where the database still looks. Stop,
+    tell the user that file is missing, and ask them to run
+    `M-x org-roam-db-sync`, then ask again.
+  - `:kind sns-roam-unknown-id`: no note has the ID in `:id`. Say so, and
+    do not ask for a sync.
+  - Any other `:kind`: report it with its keys, and stop.
 - `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
   tell the user to install it, then ask again:
 

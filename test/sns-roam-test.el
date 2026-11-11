@@ -89,6 +89,70 @@ database and no test touches the owner's slipbox or its database."
   "Return today's date as YYYY-MM-DD."
   (format-time-string "%Y-%m-%d"))
 
+(defun sns-roam-test--error-data (kind thunk)
+  "Show that calling THUNK raises condition KIND, and return its data plist.
+The data must start with :kind, whose value is KIND."
+  (let ((err (should-error (funcall thunk) :type kind)))
+    (should (eq kind (car err)))
+    (should (eq :kind (car (cdr err))))
+    (should (eq kind (plist-get (cdr err) :kind)))
+    (cdr err)))
+
+(defun sns-roam-test--should-have (data &rest expected)
+  "Show that plist DATA holds each key and value of plist EXPECTED."
+  (cl-loop for (key value) on expected by #'cddr
+           do (should (plist-member data key))
+           do (should (equal value (plist-get data key)))))
+
+;;; --- the error conditions (slice 21) ---
+
+(defconst sns-roam-test--conditions
+  '(sns-roam-unknown-id sns-roam-missing-file sns-roam-malformed-note
+    sns-roam-no-excerpt-container sns-roam-match-count
+    sns-roam-unsupported-element sns-roam-history-layout sns-roam-bad-date
+    sns-roam-reparse-mismatch sns-roam-file-exists sns-roam-id-conflict
+    sns-roam-index-failure)
+  "Every condition the bridge raises, as the slice 21 plan lists them.")
+
+(ert-deftest sns-roam-every-condition-is-an-error-with-its-kind ()
+  ;; A handler on `error' still catches each one, the data names it, and
+  ;; the message the user sees starts with the bridge's prefix.
+  (dolist (kind sns-roam-test--conditions)
+    (let ((err (condition-case caught
+                   (signal kind (list :kind kind :id "some-id"))
+                 (error caught))))
+      (should (eq kind (car err)))
+      (should (memq 'sns-roam-error (get kind 'error-conditions)))
+      (should (eq kind (plist-get (cdr err) :kind)))
+      (should (equal "some-id" (plist-get (cdr err) :id)))
+      (should (string-prefix-p "sns-roam: " (error-message-string err))))))
+
+(ert-deftest sns-roam-reworded-message-leaves-the-data-a-skill-reads ()
+  ;; S21.1: the skills act on :kind and :path, so a new wording for the
+  ;; message changes nothing they read.
+  (sns-roam-test--with-moved-note
+    (let ((message (get 'sns-roam-missing-file 'error-message))
+          (before-data (cdr (should-error (sns-roam-body-elements id)
+                                          :type 'sns-roam-missing-file))))
+      (unwind-protect
+          (progn
+            (put 'sns-roam-missing-file 'error-message
+                 "sns-roam: reworded for this test")
+            (let ((err (should-error (sns-roam-body-elements id)
+                                     :type 'sns-roam-missing-file)))
+              (should (equal before-data (cdr err)))
+              (should (string-prefix-p "sns-roam: reworded for this test"
+                                       (error-message-string err)))))
+        (put 'sns-roam-missing-file 'error-message message)))))
+
+(ert-deftest sns-roam-add-context-keeps-kind-first-and-the-raisers-values ()
+  (should (equal '(:kind sns-roam-match-count :id "a" :operation op :count 2)
+                 (sns-roam--add-context '(:kind sns-roam-match-count :count 2)
+                                        '(:id "a" :operation op))))
+  (should (equal '(:kind sns-roam-unknown-id :file "f" :id "raised")
+                 (sns-roam--add-context '(:kind sns-roam-unknown-id :id "raised")
+                                        '(:id "context" :file "f")))))
+
 ;;; --- sns-roam-meeting-note ---
 
 (ert-deftest sns-roam-meeting-note-carries-todays-date ()
@@ -120,7 +184,8 @@ database and no test touches the owner's slipbox or its database."
 
 (ert-deftest sns-roam-meeting-note-rejects-a-blank-series ()
   (sns-roam-test--with-roam-dir
-    (let ((err (should-error (sns-roam-meeting-note "   ") :type 'error)))
+    ;; Only a person at M-x meets this, so it is a `user-error'.
+    (let ((err (should-error (sns-roam-meeting-note "   ") :type 'user-error)))
       (should (equal "sns-roam-meeting-note: empty series name" (cadr err)))
       (should (null (sns-roam-test--org-files))))))
 
@@ -226,13 +291,13 @@ database and no test touches the owner's slipbox or its database."
        path ":PROPERTIES:\n:ID: existing-id\n:END:\n#+title: Existing note\n")
       (let ((bytes-before (funcall read-bytes))
             (rows-before (sns-roam-test--all-rows)))
-        (let ((err (should-error (sns-roam-create-node "Overwrite target"
-                                                       "permanent" nil
-                                                       "new-id" nil time)
-                                 :type 'error)))
-          (should (equal (format "sns-roam: refusing to overwrite existing file %s"
-                                 path)
-                         (cadr err))))
+        (sns-roam-test--should-have
+         (sns-roam-test--error-data
+          'sns-roam-file-exists
+          (lambda ()
+            (sns-roam-create-node "Overwrite target" "permanent" nil
+                                  "new-id" nil time)))
+         :id "new-id" :path path)
         (should (equal bytes-before (funcall read-bytes)))
         (should (equal rows-before (sns-roam-test--all-rows)))
         (should-not (org-roam-db-query [:select id :from nodes :where (= id $s1)]
@@ -248,13 +313,14 @@ database and no test touches the owner's slipbox or its database."
        earlier ":PROPERTIES:\n:ID: reused-id\n:END:\n#+title: Earlier note\n")
       (let ((rows-before (sns-roam-test--all-rows))
             (files-before (sns-roam-test--org-files)))
-        (let ((err (should-error (sns-roam-create-node "Retried claim"
-                                                       "permanent" nil
-                                                       "reused-id")
-                                 :type 'error)))
-          (should (string-match-p
-                   "\\`sns-roam: id \"reused-id\" already names .*earlier\\.org"
-                   (cadr err))))
+        (let ((data (sns-roam-test--error-data
+                     'sns-roam-id-conflict
+                     (lambda ()
+                       (sns-roam-create-node "Retried claim" "permanent" nil
+                                             "reused-id")))))
+          (sns-roam-test--should-have data :id "reused-id")
+          (should (file-equal-p earlier (plist-get data :registered)))
+          (should (string-suffix-p "-retried_claim.org" (plist-get data :path))))
         (should (equal files-before (sns-roam-test--org-files)))
         (should (equal rows-before (sns-roam-test--all-rows)))
         (should (file-equal-p earlier
@@ -264,15 +330,16 @@ database and no test touches the owner's slipbox or its database."
   ;; Indexing can fail with only a warning, so success must come from
   ;; the ID resolving to the new file, not from the call returning.
   (sns-roam-test--with-roam-dir
-    (let ((err (cl-letf (((symbol-function 'org-roam-db-update-file)
-                          #'ignore))
-                 (should-error (sns-roam-create-node "Unindexed claim"
-                                                     "permanent" nil
-                                                     "unindexed-id")
-                               :type 'error))))
-      (should (string-match-p
-               "\\`sns-roam: id \"unindexed-id\" resolves to nil after indexing"
-               (cadr err))))))
+    (let ((data (cl-letf (((symbol-function 'org-roam-db-update-file)
+                           #'ignore))
+                  (sns-roam-test--error-data
+                   'sns-roam-index-failure
+                   (lambda ()
+                     (sns-roam-create-node "Unindexed claim" "permanent" nil
+                                           "unindexed-id"))))))
+      (sns-roam-test--should-have data :id "unindexed-id" :actual nil)
+      (should (string-suffix-p "-unindexed_claim.org"
+                               (plist-get data :expected))))))
 
 ;;; --- sns-roam-create-node separates paragraphs (slice 10) ---
 
@@ -432,10 +499,17 @@ Comparing from there shows a blank line added after the drawer, after
 
 (ert-deftest sns-roam-body-elements-rejects-an-unknown-id ()
   (sns-roam-test--with-roam-dir
-    (let ((err (should-error (sns-roam-body-elements "missing-id")
-                             :type 'error)))
-      (should (equal "sns-roam: no roam node with id \"missing-id\""
-                     (cadr err))))))
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data 'sns-roam-unknown-id
+                                (lambda () (sns-roam-body-elements "missing-id")))
+     :id "missing-id")))
+
+(ert-deftest sns-roam-expand-rejects-an-unknown-id ()
+  (sns-roam-test--with-roam-dir
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data 'sns-roam-unknown-id
+                                (lambda () (sns-roam-expand "missing-id")))
+     :id "missing-id")))
 
 ;;; --- a note whose file has moved (slice 20) ---
 
@@ -464,10 +538,9 @@ Emacs.  Kills any buffer on either path afterwards."
   "Show that calling THUNK raises the missing-file error for ID's OLD-FILE.
 Also shows the call opened no buffer on OLD-FILE and left no file
 there."
-  (let ((err (should-error (funcall thunk) :type 'error)))
-    (should (equal (format "sns-roam: node %s's file %s does not exist"
-                           id old-file)
-                   (cadr err))))
+  (sns-roam-test--should-have
+   (sns-roam-test--error-data 'sns-roam-missing-file thunk)
+   :id id :path old-file)
   (should-not (get-file-buffer old-file))
   (should-not (file-exists-p old-file)))
 
@@ -518,11 +591,11 @@ there."
               (search-forward "noon")
               (replace-match "one" t t))
             (rename-file old-file new-file)
-            (let ((err (should-error (sns-roam-set-body id "Low water is at six.")
-                                     :type 'error)))
-              (should (equal (format "sns-roam: node %s's file %s does not exist"
-                                     id old-file)
-                             (cadr err))))
+            (sns-roam-test--should-have
+             (sns-roam-test--error-data
+              'sns-roam-missing-file
+              (lambda () (sns-roam-set-body id "Low water is at six.")))
+             :id id :path old-file)
             (should (eq buffer (get-file-buffer old-file)))
             (with-current-buffer buffer
               (should (buffer-modified-p))
@@ -592,28 +665,31 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
   ;; S12.3
   (sns-roam-test--with-reference-note
       "2026-10-24: offered terms.\n\n2026-10-30: asked for a discount.\n"
-    (let ((state-before (sns-roam-test--file-state file))
-          (err (should-error
-                (sns-roam-insert-element "contract-id"
-                                         (sns-roam-test--containing "2026")
-                                         (org-ml-build-paragraph "New line.")
-                                         t)
-                :type 'error)))
-      (should (equal "sns-roam: insert-element matched 2 elements, need exactly 1"
-                     (cadr err)))
+    (let ((state-before (sns-roam-test--file-state file)))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data
+        'sns-roam-match-count
+        (lambda ()
+          (sns-roam-insert-element "contract-id"
+                                   (sns-roam-test--containing "2026")
+                                   (org-ml-build-paragraph "New line.")
+                                   t)))
+       :id "contract-id" :file file
+       :operation 'sns-roam-insert-element :count 2)
       (should (equal state-before (sns-roam-test--file-state file))))))
 
 (ert-deftest sns-roam-insert-element-refuses-an-anchor-that-matches-nothing ()
   (sns-roam-test--with-reference-note
       "Edition: Pro.\n\nOpen: renewal date.\n"
-    (let ((state-before (sns-roam-test--file-state file))
-          (err (should-error
-                (sns-roam-insert-element "contract-id"
-                                         (sns-roam-test--containing "2027")
-                                         (org-ml-build-paragraph "New line."))
-                :type 'error)))
-      (should (equal "sns-roam: insert-element matched 0 elements, need exactly 1"
-                     (cadr err)))
+    (let ((state-before (sns-roam-test--file-state file)))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data
+        'sns-roam-match-count
+        (lambda ()
+          (sns-roam-insert-element "contract-id"
+                                   (sns-roam-test--containing "2027")
+                                   (org-ml-build-paragraph "New line."))))
+       :operation 'sns-roam-insert-element :count 0)
       (should (equal state-before (sns-roam-test--file-state file))))))
 
 (ert-deftest sns-roam-insert-element-never-shows-the-header-to-the-predicate ()
@@ -678,16 +754,17 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
   ;; A list beside a list would merge into one, so only paragraphs go in.
   (sns-roam-test--with-reference-note
       "Edition: Pro.\n\nOpen: renewal date.\n"
-    (let ((state-before (sns-roam-test--file-state file))
-          (err (should-error
-                (sns-roam-insert-element
-                 "contract-id"
-                 (sns-roam-test--containing "Edition")
-                 (car (sns-roam--parse-body-elements "- seats\n- users\n"))
-                 t)
-                :type 'error)))
-      (should (equal "sns-roam: insert-element takes a paragraph, not a plain-list"
-                     (cadr err)))
+    (let ((state-before (sns-roam-test--file-state file)))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data
+        'sns-roam-unsupported-element
+        (lambda ()
+          (sns-roam-insert-element
+           "contract-id"
+           (sns-roam-test--containing "Edition")
+           (car (sns-roam--parse-body-elements "- seats\n- users\n"))
+           t)))
+       :id "contract-id" :operation 'sns-roam-insert-element :type 'plain-list)
       (should (equal state-before (sns-roam-test--file-state file))))))
 
 (ert-deftest sns-roam-insert-element-refuses-a-plan-that-would-not-reparse ()
@@ -696,7 +773,7 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
   (sns-roam-test--with-reference-note
       "Edition: Pro.\n\nOpen: renewal date.\n"
     (let ((state-before (sns-roam-test--file-state file))
-          (err (cl-letf (((symbol-function 'sns-roam--insert-beside)
+          (data (cl-letf (((symbol-function 'sns-roam--insert-beside)
                           (lambda (children anchor new-element _after)
                             (cl-mapcan
                              (lambda (child)
@@ -707,15 +784,20 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                                                  :post-blank 0 new-element))
                                    (list flat))))
                              children))))
-                 (should-error
-                  (sns-roam-insert-element "contract-id"
-                                           (sns-roam-test--containing "Edition")
-                                           (org-ml-build-paragraph "Units: 40.")
-                                           t)
-                  :type 'error))))
-      (should (equal (concat "sns-roam: insert-element planned 3 body elements"
-                             " but they read back as 1")
-                     (cadr err)))
+                 (sns-roam-test--error-data
+                  'sns-roam-reparse-mismatch
+                  (lambda ()
+                    (sns-roam-insert-element "contract-id"
+                                             (sns-roam-test--containing "Edition")
+                                             (org-ml-build-paragraph "Units: 40.")
+                                             t))))))
+      (sns-roam-test--should-have
+       data
+       :id "contract-id" :file file :operation 'sns-roam-insert-element
+       :planned '((paragraph "Edition: Pro.")
+                  (paragraph "Units: 40.")
+                  (paragraph "Open: renewal date."))
+       :actual '((paragraph "Edition: Pro.\nUnits: 40.\nOpen: renewal date.")))
       (should (equal state-before (sns-roam-test--file-state file))))))
 
 (ert-deftest sns-roam-insert-into-section-is-callable-without-a-file ()
@@ -734,14 +816,15 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                    (mapcar #'org-ml-to-trimmed-string
                            (seq-remove #'sns-roam--section-header-p
                                        (org-ml-get-children result)))))
-    (should (equal "sns-roam: insert-element matched 2 elements, need exactly 1"
-                   (cadr (should-error
-                          (sns-roam--insert-into-section
-                           section
-                           (sns-roam-test--containing ".")
-                           (org-ml-build-paragraph "Units: 40.")
-                           nil)
-                          :type 'error))))))
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-match-count
+      (lambda ()
+        (sns-roam--insert-into-section section
+                                       (sns-roam-test--containing ".")
+                                       (org-ml-build-paragraph "Units: 40.")
+                                       nil)))
+     :operation 'sns-roam-insert-element :count 2)))
 
 (ert-deftest sns-roam-insert-element-adds-no-blank-line-before-a-headline ()
   (sns-roam-test--with-reference-note
@@ -804,11 +887,15 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
     (let ((result (sns-roam-history-anchor "contract-id" date)))
       (list (plist-get result :anchor) (plist-get result :after)))))
 
-(defun sns-roam-test--anchor-error (body-text date)
-  "Return the error message `sns-roam-history-anchor' raises on BODY-TEXT for DATE."
+(defun sns-roam-test--anchor-error (kind body-text date)
+  "Return the data of condition KIND `sns-roam-history-anchor' raises on BODY-TEXT for DATE.
+Also shows the data names the note and its file."
   (sns-roam-test--with-reference-note body-text
-    (cadr (should-error (sns-roam-history-anchor "contract-id" date)
-                        :type 'error))))
+    (let ((data (sns-roam-test--error-data
+                 kind
+                 (lambda () (sns-roam-history-anchor "contract-id" date)))))
+      (sns-roam-test--should-have data :id "contract-id" :file file)
+      data)))
 
 (ert-deftest sns-roam-history-anchor-puts-a-middle-date-before-the-older-line ()
   ;; S13.1
@@ -844,63 +931,87 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
       (should-not (buffer-modified-p (get-file-buffer file))))))
 
 (ert-deftest sns-roam-history-anchor-refuses-a-date-not-written-yyyy-mm-dd ()
-  (should (equal "sns-roam: history-anchor needs a date as YYYY-MM-DD, not \"8 Nov 2026\""
-                 (sns-roam-test--anchor-error sns-roam-test--history-body
-                                              "8 Nov 2026"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error 'sns-roam-bad-date sns-roam-test--history-body
+                                "8 Nov 2026")
+   :date "8 Nov 2026"))
 
 (ert-deftest sns-roam-history-anchor-refuses-a-note-with-a-heading ()
   ;; S13.2: the heading follows the body, so only a parse of the whole
   ;; buffer sees it.
-  (should (equal (concat "sns-roam: history-anchor reads notes without headings,"
-                         " not one with \"History\"")
-                 (sns-roam-test--anchor-error
-                  (concat "Current state: Pro edition.\n\n"
-                          "* History\n2026-11-06: offered terms.\n")
-                  "2026-11-12"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-unsupported-element
+    (concat "Current state: Pro edition.\n\n"
+            "* History\n2026-11-06: offered terms.\n")
+    "2026-11-12")
+   :operation 'sns-roam-history-anchor :type 'headline :title "History"))
 
 (ert-deftest sns-roam-history-anchor-refuses-a-list ()
-  (should (equal "sns-roam: history-anchor reads paragraphs only, not a plain-list"
-                 (sns-roam-test--anchor-error
-                  "Current state: Pro edition.\n\n- 2026-11-06: offered terms.\n"
-                  "2026-11-08"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-unsupported-element
+    "Current state: Pro edition.\n\n- 2026-11-06: offered terms.\n"
+    "2026-11-08")
+   :operation 'sns-roam-history-anchor :type 'plain-list))
 
 (ert-deftest sns-roam-history-anchor-refuses-an-empty-body ()
-  (should (equal "sns-roam: history-anchor found no paragraphs in the body"
-                 (sns-roam-test--anchor-error "" "2026-11-08"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error 'sns-roam-history-layout "" "2026-11-08")
+   :reason 'no-paragraphs))
 
 (ert-deftest sns-roam-history-anchor-refuses-an-open-paragraph-after-a-dated-line ()
-  (should (equal (concat "sns-roam: history-anchor needs the dated lines"
-                         " as one run at the end of the body")
-                 (sns-roam-test--anchor-error
-                  (concat "Current state: Pro edition.\n\n"
-                          "2026-11-09: asked for a discount.\n\n"
-                          "Open: renewal date.\n\n"
-                          "2026-11-06: offered terms.\n")
-                  "2026-11-08"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-history-layout
+    (concat "Current state: Pro edition.\n\n"
+            "2026-11-09: asked for a discount.\n\n"
+            "Open: renewal date.\n\n"
+            "2026-11-06: offered terms.\n")
+    "2026-11-08")
+   :reason 'not-one-run))
 
 (ert-deftest sns-roam-history-anchor-refuses-dated-lines-oldest-first ()
-  (should (equal (concat "sns-roam: history-anchor needs the dated lines newest first,"
-                         " but 2026-11-06 comes before 2026-11-09")
-                 (sns-roam-test--anchor-error
-                  (concat "Open: renewal date.\n\n"
-                          "2026-11-06: offered terms.\n\n"
-                          "2026-11-09: asked for a discount.\n")
-                  "2026-11-08"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-history-layout
+    (concat "Open: renewal date.\n\n"
+            "2026-11-06: offered terms.\n\n"
+            "2026-11-09: asked for a discount.\n")
+    "2026-11-08")
+   :reason 'not-newest-first :dates '("2026-11-06" "2026-11-09")))
 
 (ert-deftest sns-roam-history-anchor-refuses-an-anchor-text-that-appears-twice ()
-  (should (equal (concat "sns-roam: history-anchor found the anchor"
-                         " \"2026-11-06: offered terms.\" twice")
-                 (sns-roam-test--anchor-error
-                  (concat "Open: renewal date.\n\n"
-                          "2026-11-06: offered terms.\n\n"
-                          "2026-11-06: offered terms.\n")
-                  "2026-11-08"))))
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-match-count
+    (concat "Open: renewal date.\n\n"
+            "2026-11-06: offered terms.\n\n"
+            "2026-11-06: offered terms.\n")
+    "2026-11-08")
+   :operation 'sns-roam-history-anchor :count 2
+   :anchor "2026-11-06: offered terms."))
+
+(ert-deftest sns-roam-history-anchor-reports-a-duplicated-newest-line ()
+  ;; S21.2: the second note of a batch has its newest line twice, so a
+  ;; line dated after it has two places to go.
+  (sns-roam-test--should-have
+   (sns-roam-test--anchor-error
+    'sns-roam-match-count
+    (concat "Current state: Pro edition.\n\n"
+            "2026-11-11: weekly check-in.\n\n"
+            "2026-11-11: weekly check-in.\n")
+    "2026-11-12")
+   :operation 'sns-roam-history-anchor :count 2
+   :anchor "2026-11-11: weekly check-in."))
 
 (ert-deftest sns-roam-history-anchor-rejects-an-unknown-id ()
   (sns-roam-test--with-roam-dir
-    (should (equal "sns-roam: no roam node with id \"missing-id\""
-                   (cadr (should-error (sns-roam-history-anchor "missing-id" "2026-11-08")
-                                       :type 'error))))))
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-unknown-id
+      (lambda () (sns-roam-history-anchor "missing-id" "2026-11-08")))
+     :id "missing-id")))
 
 (ert-deftest sns-roam-history-anchor-feeds-insert-element ()
   ;; S13.3: the anchor and :after go to `insert-element' unchanged, and
@@ -1138,7 +1249,7 @@ ID \"other-id\" is there to link to."
   ;; well as its blank lines is still written as org prints it.
   (sns-roam-test--with-typed-note
     (sns-roam--update-section
-     "typed-id"
+     'sns-roam-set-body "typed-id"
      (lambda (section)
        (sns-roam--map-children
         (lambda (children)
@@ -1233,15 +1344,152 @@ TEXT has no final newline; see `sns-roam-test--with-bare-note'."
                      (list (list :begin (org-ml-get-property :begin two)
                                  :end   (org-ml-get-property :begin two)
                                  :text  "Merged "))))))
-        (let ((err (should-error
-                    (sns-roam-insert-element
-                     "bare-id"
-                     (lambda (node) (equal "One." (org-ml-to-trimmed-string node)))
-                     (org-ml-build-paragraph "New.")
-                     t))))
-          (should (string-match-p "would not read back as planned" (cadr err)))))
+        (let ((data (sns-roam-test--error-data
+                     'sns-roam-reparse-mismatch
+                     (lambda ()
+                       (sns-roam-insert-element
+                        "bare-id"
+                        (lambda (node) (equal "One." (org-ml-to-trimmed-string node)))
+                        (org-ml-build-paragraph "New.")
+                        t)))))
+          (sns-roam-test--should-have data
+                                      :id "bare-id" :file file
+                                      :operation 'sns-roam-insert-element)
+          ;; Each list starts with the drawer and the title, then the body.
+          (should (equal '((paragraph "One.") (paragraph "New.") (paragraph "Two."))
+                         (seq-drop (plist-get data :planned) 2)))
+          (should (equal '((paragraph "One.") (paragraph "Merged Two."))
+                         (seq-drop (plist-get data :actual) 2)))))
       (should (equal before (sns-roam-test--file-text file)))
       (should-not (buffer-modified-p (get-file-buffer file))))))
+
+;;; --- every failure site raises its condition with its facts (slice 21) ---
+
+(ert-deftest sns-roam-excerpt-at-a-headline-reports-no-container ()
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Heading\nUnder it.\n"
+    (let ((point (with-temp-buffer
+                   (insert before)
+                   (goto-char (point-min))
+                   (search-forward "Heading"))))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data 'sns-roam-no-excerpt-container
+                                  (lambda () (sns-roam-excerpt "bare-id" point)))
+       :id "bare-id" :point point :file file))))
+
+(defconst sns-roam-test--headline-id-note
+  "#+title: Headless\nIntro.\n* Heading\n:PROPERTIES:\n:ID: heading-id\n:END:\nUnder it.\n"
+  "A note whose only ID is on a heading, so its first section has no drawer.")
+
+(ert-deftest sns-roam-set-property-reports-a-section-with-no-drawer ()
+  (sns-roam-test--with-bare-note sns-roam-test--headline-id-note
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-malformed-note
+      (lambda () (sns-roam-set-property "heading-id" "KIND" "reference")))
+     :id "heading-id" :file file :missing 'property-drawer :key "KIND"
+     :operation 'sns-roam-set-property)
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-set-body-reports-a-note-with-no-first-section ()
+  (sns-roam-test--with-bare-note
+      "* Heading\n:PROPERTIES:\n:ID: heading-id\n:END:\nUnder it.\n"
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-malformed-note
+      (lambda () (sns-roam-set-body "heading-id" "New body.")))
+     :id "heading-id" :file file :missing 'section
+     :operation 'sns-roam-set-body)
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-replace-element-reports-two-matches ()
+  (sns-roam-test--with-reference-note
+      "2026-10-24: offered terms.\n\n2026-10-30: asked for a discount.\n"
+    (let ((state-before (sns-roam-test--file-state file)))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data
+        'sns-roam-match-count
+        (lambda ()
+          (sns-roam-replace-element "contract-id"
+                                    (sns-roam-test--containing "2026-10")
+                                    (org-ml-build-paragraph "Replaced."))))
+       :id "contract-id" :file file
+       :operation 'sns-roam-replace-element :count 2)
+      (should (equal state-before (sns-roam-test--file-state file))))))
+
+(ert-deftest sns-roam-insert-element-reports-an-element-org-prints-otherwise ()
+  ;; Org prints every element it parses with its blank lines after its
+  ;; text, so no note reaches this refusal.  The stub makes org print a
+  ;; table with no blank lines as other text, which is the only call
+  ;; the refusal depends on.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\nIntro.\n\n|a|b|\nOutro.\n"
+    (let* ((print (symbol-function 'org-ml-to-string))
+           (data (cl-letf (((symbol-function 'org-ml-to-string)
+                            (lambda (node)
+                              (if (and (org-ml-is-type 'table node)
+                                       (eql 0 (org-ml-get-property :post-blank node)))
+                                  (concat "# " (funcall print node))
+                                (funcall print node)))))
+                   (sns-roam-test--error-data
+                    'sns-roam-unsupported-element
+                    (lambda ()
+                      (sns-roam-insert-element "bare-id"
+                                               (sns-roam-test--containing "| a | b |")
+                                               (org-ml-build-paragraph "New.")
+                                               t))))))
+      (sns-roam-test--should-have data
+                                  :id "bare-id" :file file
+                                  :operation 'sns-roam-insert-element
+                                  :type 'table)
+      (should (equal before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-rename-file-reports-a-file-not-named-timestamp-slug ()
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n"
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data 'sns-roam-malformed-note
+                                (lambda () (sns-roam-rename-file "bare-id" "new")))
+     :id "bare-id" :file file :missing 'roam-filename :name "bare.org")
+    (should (file-exists-p file))))
+
+(ert-deftest sns-roam-rename-file-refuses-a-name-another-file-has ()
+  (sns-roam-test--with-typed-note
+    (let ((taken (expand-file-name "20261111090000-taken.org" org-roam-directory)))
+      (with-temp-file taken
+        (insert "Someone else's note.\n"))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data 'sns-roam-file-exists
+                                  (lambda () (sns-roam-rename-file "typed-id" "taken")))
+       :id "typed-id" :path taken)
+      (should (equal before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-rename-file-refuses-the-name-it-has ()
+  ;; The note's own file exists, so the overwrite check before this one
+  ;; refuses first and no note reaches it.  The stub reports that no
+  ;; file exists, which is the only call before the refusal.
+  (sns-roam-test--with-typed-note
+    (sns-roam-test--should-have
+     (cl-letf (((symbol-function 'sns-roam--node-file-or-error)
+                (lambda (_id) file))
+               ((symbol-function 'file-exists-p) #'ignore))
+       (sns-roam-test--error-data
+        'sns-roam-file-exists
+        (lambda () (sns-roam-rename-file "typed-id" "typed_note"))))
+     :id "typed-id" :path file :slug "typed_note")
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-rename-reports-a-node-gone-after-the-title-write ()
+  ;; A node vanishes between the title write and the lookup only if the
+  ;; database changes between them.  The stub makes the title write,
+  ;; the call before the lookup, do nothing for an ID with no node.
+  (sns-roam-test--with-roam-dir
+    (sns-roam-test--should-have
+     (cl-letf (((symbol-function 'sns-roam-set-keyword) #'ignore))
+       (sns-roam-test--error-data
+        'sns-roam-unknown-id
+        (lambda () (sns-roam-rename "missing-id" "New title"))))
+     :id "missing-id")))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

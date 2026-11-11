@@ -159,7 +159,7 @@ note file, and never place the line yourself or rewrite the body with
                                 (mapcar #'org-ml-to-trimmed-string
                                         (plist-get (sns-roam-body-elements id)
                                                    :elements))))
-                (error (list :id id :error (error-message-string err)))))
+                (sns-roam-error (list :id id :error (cdr err)))))
             ids)))
      (with-temp-file "/tmp/history-anchor.out"
        (prin1 places (current-buffer))))
@@ -168,8 +168,12 @@ note file, and never place the line yourself or rewrite the body with
    Neither call writes anything.
 3. **Stop on any error.** If any entry has `:error`, report every error,
    naming each note, and stop. Offer nothing to apply, not even for the
-   notes that passed. A note in another layout, such as one with a
-   `* History` heading, is for the owner to edit by hand.
+   notes that passed. Each `:error` is a plist that starts with `:kind`.
+   Report the `:kind` and the facts it carries, such as `:count` for
+   `sns-roam-match-count`, and read nothing from a message. A note in
+   another layout (`sns-roam-history-layout`, or
+   `sns-roam-unsupported-element` for a `* History` heading) is for the
+   owner to edit by hand.
 4. **SHOW** each note's `:elements` with the new line placed before
    `:anchor`, or after it when `:after` is `t`. Ask to apply.
 5. **APPLY** after the owner confirms, with each note's `:id`, `:anchor`
@@ -190,8 +194,8 @@ note file, and never place the line yourself or rewrite the body with
                        (string= anchor (org-ml-to-trimmed-string node)))
                      (org-ml-build-paragraph (plist-get place :line))
                      (plist-get place :after))
-                  (error (list :id (plist-get place :id)
-                               :error (error-message-string err))))))
+                  (sns-roam-error (list :id (plist-get place :id)
+                                        :error (cdr err))))))
             places)))
      (with-temp-file "/tmp/history-apply.out"
        (prin1 results (current-buffer))))
@@ -331,7 +335,9 @@ One stage at a time. Show before write.
 
 6. **APPLY.** Build each body as org-ml AST against the pre-minted IDs;
    `create-node` each with KIND `"permanent"` and its pre-minted ID. Wrap
-   each in `condition-case`; collect `(:ok FILE)` / `(:error TITLE MSG)`.
+   each in `condition-case` on `sns-roam-error`; collect `(:ok FILE)` /
+   `(:error TITLE DATA)`, where DATA is `(cdr err)`, the plist that
+   starts with `:kind`.
 
 7. **SYNC + VERIFY.** Run `(org-roam-db-sync)` so the new files are graph-live
    (links/backlinks won't resolve until synced). Then verify:
@@ -534,7 +540,16 @@ emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbo
   `org-roam-db-autosync-mode`), then ask again. With `:files 0` the
   slipbox is empty, which is fine: there is nothing to find yet, and
   new notes can still be written.
-- A later call fails with `sns-roam: node ID's file PATH does not exist`: the note's file moved after org-roam last synced. Stop, tell the user PATH is missing, and ask them to run `M-x org-roam-db-sync`, then ask again.
+- A later call fails. Every sns-roam failure prints its data after the
+  message, a plist that starts with `:kind`. Act on `:kind` and the
+  other keys, never on the wording:
+  - `:kind sns-roam-missing-file`: the note's file moved after org-roam
+    last synced, and `:path` is where the database still looks. Stop,
+    tell the user that file is missing, and ask them to run
+    `M-x org-roam-db-sync`, then ask again.
+  - `:kind sns-roam-unknown-id`: no note has the ID in `:id`. Say so, and
+    do not ask for a sync.
+  - Any other `:kind`: report it with its keys, and stop.
 - `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
   tell the user to install it, then ask again:
 
