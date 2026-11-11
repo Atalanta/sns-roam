@@ -29,8 +29,8 @@ The skills name the owner's employers in the person-note rule, hand off to Aldi 
 
 Scenario: S17.1 A second user's external contact gets a person note
   Given a second user whose Claude instructions name "Acme" as their organisation
-  When they ask Claude to capture a meeting with Jo Bloggs of Initech
-  Then Claude proposes a person note for Jo Bloggs, and gives a person from Acme no person note
+  When they ask Claude to capture a meeting with Jo Bloggs of Initech and Sam Lee of Acme
+  Then Claude proposes a person note for Jo Bloggs, and names Sam Lee in plain text with no person note
 
 Scenario: S17.2 The owner's conventions come from the owner's instructions
   Given the owner's `~/.claude/CLAUDE.local.md` with a "Roam conventions" section
@@ -49,4 +49,4 @@ None.
 
 ## Done when
 
-The grep above finds no match in either skill. The owner reads the new "Roam conventions" section in `CLAUDE.local.md` and the skills' conventions paragraph. The builder runs S17.1 by hand in a Claude session with a temporary instruction naming Acme, and shows the proposed notes. `mise run check` and `mise run test` pass.
+The grep above finds no match in either skill. The owner reads the new "Roam conventions" section in `CLAUDE.local.md`, the skills' conventions paragraph, and the renamed elisp section beside the old one in `git diff`, and finds the same three rules. The builder also runs S17.1 as the owner, with Ticketmaster in place of Acme, and shows the Ticketmaster person kept as a plain name. The builder runs S17.1 by hand in a Claude session with a temporary instruction naming Acme, and shows the proposed notes. `mise run check` and `mise run test` pass.
