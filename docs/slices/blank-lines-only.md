@@ -37,7 +37,7 @@ Scenario: S19.1 Linking a note that ends in a typed source block
 Scenario: S19.2 Adding a line after a typed table
   Given a note whose body is "Intro." then the table `|a|b|` with no blank line after it, then "Outro."
   When the owner asks Claude to add the paragraph "New." after the table
-  Then a `diff` shows only a blank line and "New." added, and `|a|b|` is byte-identical
+  Then a `diff` shows only "New." added with a blank line before and after it, and `|a|b|` and "Outro." are byte-identical
 
 ## Facts the builder needs
 
@@ -52,4 +52,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` has a test per scenario that compares the file text before and after with `sns-roam-test--changed-lines`, and the builder shows both failing on `main`. A test of an element whose content and blank lines both change shows it still written in org's form. The existing tests pass, including slice 14's. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` has a test per scenario that compares the file text before and after with `sns-roam-test--changed-lines`, and the builder shows both failing on `main`. A test of an element whose content and blank lines both change shows it still written in org's form. A test calls `sns-roam--section-edits` on a spacing-only change and shows that its edit's text is only newlines and that the edit starts after the element's last non-blank character. The existing tests pass, including slice 14's. `mise run check` and `mise run test` pass.
