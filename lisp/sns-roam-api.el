@@ -17,35 +17,68 @@
 
 (define-error 'sns-roam-error "sns-roam: error")
 
-(define-error 'sns-roam-unknown-id
-  "sns-roam: no roam node has this id" 'sns-roam-error)
-(define-error 'sns-roam-missing-file
-  "sns-roam: the note's file is not where the database says; run M-x org-roam-db-sync"
-  'sns-roam-error)
-(define-error 'sns-roam-malformed-note
-  "sns-roam: the note lacks a part a roam file has" 'sns-roam-error)
-(define-error 'sns-roam-no-excerpt-container
-  "sns-roam: no paragraph, item, quote or verse block encloses the point"
-  'sns-roam-error)
-(define-error 'sns-roam-match-count
-  "sns-roam: the match is not exactly one element" 'sns-roam-error)
-(define-error 'sns-roam-unsupported-element
-  "sns-roam: the operation does not take this element type" 'sns-roam-error)
-(define-error 'sns-roam-history-layout
-  "sns-roam: the note is not in the reference-note history layout"
-  'sns-roam-error)
-(define-error 'sns-roam-bad-date
-  "sns-roam: the date is not written YYYY-MM-DD" 'sns-roam-error)
-(define-error 'sns-roam-reparse-mismatch
-  "sns-roam: the edit would not read back as planned, so nothing was written"
-  'sns-roam-error)
-(define-error 'sns-roam-file-exists
-  "sns-roam: refusing to overwrite an existing file" 'sns-roam-error)
-(define-error 'sns-roam-id-conflict
-  "sns-roam: the id already names another file" 'sns-roam-error)
-(define-error 'sns-roam-index-failure
-  "sns-roam: after indexing, the id does not resolve to the new file"
-  'sns-roam-error)
+(defvar sns-roam--error-kinds nil
+  "Every condition `sns-roam-define-error' has declared, oldest first.")
+
+(defmacro sns-roam-define-error (kind message fields)
+  "Declare the failure KIND, a child of `sns-roam-error', with MESSAGE and FIELDS.
+Defines the condition `sns-roam-KIND', whose message is MESSAGE after
+\"sns-roam: \", and the function `sns-roam--signal-KIND', whose argument
+list is FIELDS.  The function signals the condition with the plist
+:kind, then each field under its keyword; a field after `&optional'
+is left out when its value is nil.  KIND joins `sns-roam--error-kinds'."
+  (declare (indent 2))
+  (let* ((condition (intern (format "sns-roam-%s" kind)))
+         (signaller (intern (format "sns-roam--signal-%s" kind)))
+         (required (seq-take-while (lambda (field) (not (eq field '&optional)))
+                                   fields))
+         (optional (cdr (memq '&optional fields)))
+         (keyword (lambda (field) (intern (format ":%s" field)))))
+    `(progn
+       (define-error ',condition ,(concat "sns-roam: " message) 'sns-roam-error)
+       (defun ,signaller ,fields
+         ,(format "Signal `%s' with the facts\n%s.\nDeclared by `sns-roam-define-error'."
+                  condition (upcase (format "%s" fields)))
+         (signal ',condition
+                 (append (list :kind ',condition
+                               ,@(mapcan (lambda (field)
+                                           (list (funcall keyword field) field))
+                                         required))
+                         ,@(mapcar (lambda (field)
+                                     `(and ,field (list ,(funcall keyword field) ,field)))
+                                   optional))))
+       (add-to-list 'sns-roam--error-kinds ',condition t))))
+
+(sns-roam-define-error unknown-id "no roam node has this id"
+  (id))
+(sns-roam-define-error missing-file
+    "the note's file is not where the database says; run M-x org-roam-db-sync"
+  (id path))
+(sns-roam-define-error malformed-note "the note lacks a part a roam file has"
+  (missing &optional id file key name))
+(sns-roam-define-error no-excerpt-container
+    "no paragraph, item, quote or verse block encloses the point"
+  (id point file))
+(sns-roam-define-error match-count "the match is not exactly one element"
+  (count &optional operation anchor))
+(sns-roam-define-error unsupported-element
+    "the operation does not take this element type"
+  (type &optional operation title))
+(sns-roam-define-error history-layout
+    "the note is not in the reference-note history layout"
+  (reason &optional dates))
+(sns-roam-define-error bad-date "the date is not written YYYY-MM-DD"
+  (date))
+(sns-roam-define-error reparse-mismatch
+    "the edit would not read back as planned, so nothing was written"
+  (planned actual &optional file))
+(sns-roam-define-error file-exists "refusing to overwrite an existing file"
+  (id path &optional slug))
+(sns-roam-define-error id-conflict "the id already names another file"
+  (id registered path))
+(sns-roam-define-error index-failure
+    "after indexing, the id does not resolve to the new file"
+  (id expected actual))
 
 (defun sns-roam--add-context (data context)
   "Return condition DATA with each key of plist CONTEXT that DATA lacks.
@@ -208,8 +241,7 @@ all backlinks (=:direction :backward=) and forward links
 Loud failure if ID has no roam node."
   (let* ((centre (org-roam-node-from-id id))
          (_ (unless centre
-              (signal 'sns-roam-unknown-id
-                      (list :kind 'sns-roam-unknown-id :id id))))
+              (sns-roam--signal-unknown-id id)))
          (back-edges (sns-roam--backlink-edges centre))
          (fwd-edges  (sns-roam--forward-link-edges centre))
          (all-edges  (append back-edges fwd-edges))
@@ -289,9 +321,7 @@ a property drawer — fix the upstream caller."
                               sns-roam--excerpt-container-types)
                    return el)))
     (unless container
-      (signal 'sns-roam-no-excerpt-container
-              (list :kind 'sns-roam-no-excerpt-container
-                    :id id :point point :file file)))
+      (sns-roam--signal-no-excerpt-container id point file))
     (list :id              id
           :file            file
           :point           point
@@ -309,8 +339,7 @@ runs before any buffer is visited.  So no call opens a buffer on the
 missing path or saves a new file there.  A buffer the user already has
 open on it keeps its unsaved edits (issue #13)."
   (unless (file-exists-p file)
-    (signal 'sns-roam-missing-file
-            (list :kind 'sns-roam-missing-file :id id :path file)))
+    (sns-roam--signal-missing-file id file))
   file)
 
 (defun sns-roam--node-file-or-error (id)
@@ -319,7 +348,7 @@ Loud failure on an unknown ID, and on a file that has moved since the
 last sync.  Never returns nil."
   (let ((node (org-roam-node-from-id id)))
     (unless node
-      (signal 'sns-roam-unknown-id (list :kind 'sns-roam-unknown-id :id id)))
+      (sns-roam--signal-unknown-id id))
     (sns-roam--existing-file-or-error id (org-roam-node-file node))))
 
 (defun sns-roam--upsert-node-property (drawer key value)
@@ -352,9 +381,7 @@ write boundary adds the note's :id and :file.  Pure."
                               (org-ml-is-type 'property-drawer child))
                             (org-ml-get-children section))))
     (unless drawer
-      (signal 'sns-roam-malformed-note
-              (list :kind 'sns-roam-malformed-note
-                    :missing 'property-drawer :key key)))
+      (sns-roam--signal-malformed-note 'property-drawer nil nil key))
     (sns-roam--map-children
      (lambda (children)
        (mapcar (lambda (child)
@@ -435,9 +462,7 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
        (lambda ()
          (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
            (unless (and section (org-ml-is-type 'section section))
-             (signal 'sns-roam-malformed-note
-                     (list :kind 'sns-roam-malformed-note
-                           :id id :file file :missing 'section)))
+             (sns-roam--signal-malformed-note 'section id file))
            (let* ((new-section (funcall section-fn section))
                   (edits       (sns-roam--section-edits
                                 (org-ml-get-children section)
@@ -499,9 +524,7 @@ with no blank lines.  Pure."
       ;; When org prints the element as other text once it has blank
       ;; lines, the element cannot keep its typed text.
       (unless (string-prefix-p content printed)
-        (signal 'sns-roam-unsupported-element
-                (list :kind 'sns-roam-unsupported-element
-                      :type (org-ml-get-type child))))
+        (sns-roam--signal-unsupported-element (org-ml-get-type child)))
       (substring printed (length content)))))
 
 (defun sns-roam--run-edit (old-children from to new-nodes blank-lines)
@@ -632,9 +655,7 @@ missing line break."
     (let ((planned (sns-roam--child-signature (org-ml-get-children new-section)))
           (actual  (sns-roam--child-signature reparsed)))
       (unless (equal planned actual)
-        (signal 'sns-roam-reparse-mismatch
-                (list :kind 'sns-roam-reparse-mismatch
-                      :file file :planned planned :actual actual))))))
+        (sns-roam--signal-reparse-mismatch planned actual file)))))
 
 (defun sns-roam-append-link (from-id to-id label before after)
   "Append a relationship paragraph to FROM-ID linking to TO-ID.
@@ -695,8 +716,7 @@ through `sns-roam--update-section'. Returns (:id :file)."
    (lambda (section)
      (let ((matches (org-ml-match `((:pred ,pred)) section)))
        (unless (= 1 (length matches))
-         (signal 'sns-roam-match-count
-                 (list :kind 'sns-roam-match-count :count (length matches))))
+         (sns-roam--signal-match-count (length matches)))
        (org-ml-match-map `((:pred ,pred))
                          (lambda (_old) new-element)
                          section)))))
@@ -749,9 +769,7 @@ by too few blank lines; the write boundary adds the :file.  Pure."
         (reparsed (sns-roam--body-signature
                    (sns-roam--parse-body-elements (org-ml-to-string section)))))
     (unless (equal planned reparsed)
-      (signal 'sns-roam-reparse-mismatch
-              (list :kind 'sns-roam-reparse-mismatch
-                    :planned planned :actual reparsed)))
+      (sns-roam--signal-reparse-mismatch planned reparsed))
     section))
 
 (defun sns-roam--insert-into-section (section pred new-element after)
@@ -762,20 +780,15 @@ NEW-ELEMENT after the match, nil before.  Raises an `sns-roam:' error
 when NEW-ELEMENT is not a paragraph, when PRED matches zero or many
 elements, or when the result would not read back as planned.  Pure."
   (unless (org-ml-is-type 'paragraph new-element)
-    (signal 'sns-roam-unsupported-element
-            (list :kind 'sns-roam-unsupported-element
-                  :operation 'sns-roam-insert-element
-                  :type (org-ml-get-type new-element))))
+    (sns-roam--signal-unsupported-element (org-ml-get-type new-element)
+                                          'sns-roam-insert-element))
   (let ((matches (seq-filter
                   (lambda (child)
                     (and (not (sns-roam--section-header-p child))
                          (funcall pred child)))
                   (org-ml-get-children section))))
     (unless (= 1 (length matches))
-      (signal 'sns-roam-match-count
-              (list :kind 'sns-roam-match-count
-                    :operation 'sns-roam-insert-element
-                    :count (length matches))))
+      (sns-roam--signal-match-count (length matches) 'sns-roam-insert-element))
     (sns-roam--check-reparse
      (sns-roam--map-children
       (lambda (children)
@@ -814,24 +827,19 @@ body element that is not a paragraph, or on an empty body.  Pure."
   (let ((headline (seq-find (lambda (child) (org-ml-is-type 'headline child))
                             top-level-children)))
     (when headline
-      (signal 'sns-roam-unsupported-element
-              (list :kind 'sns-roam-unsupported-element
-                    :operation 'sns-roam-history-anchor
-                    :type 'headline
-                    :title (org-ml-get-property :raw-value headline)))))
+      (sns-roam--signal-unsupported-element
+       'headline 'sns-roam-history-anchor
+       (org-ml-get-property :raw-value headline))))
   ;; With no headline, the top level is the one section, or nothing in
   ;; an empty file.
   (let ((body (seq-remove #'sns-roam--section-header-p
                           (seq-mapcat #'org-ml-get-children top-level-children))))
     (unless body
-      (signal 'sns-roam-history-layout
-              (list :kind 'sns-roam-history-layout :reason 'no-paragraphs)))
+      (sns-roam--signal-history-layout 'no-paragraphs))
     (dolist (element body)
       (unless (org-ml-is-type 'paragraph element)
-        (signal 'sns-roam-unsupported-element
-                (list :kind 'sns-roam-unsupported-element
-                      :operation 'sns-roam-history-anchor
-                      :type (org-ml-get-type element)))))
+        (sns-roam--signal-unsupported-element (org-ml-get-type element)
+                                              'sns-roam-history-anchor)))
     body))
 
 (defun sns-roam--check-history-run (dates)
@@ -840,14 +848,11 @@ DATES holds each body paragraph's opening date, or nil for an
 undated paragraph, in buffer order.  Pure."
   (let ((run (seq-drop-while #'null dates)))
     (when (memq nil run)
-      (signal 'sns-roam-history-layout
-              (list :kind 'sns-roam-history-layout :reason 'not-one-run)))
+      (sns-roam--signal-history-layout 'not-one-run))
     (cl-mapc (lambda (newer older)
                (when (string< newer older)
-                 (signal 'sns-roam-history-layout
-                         (list :kind 'sns-roam-history-layout
-                               :reason 'not-newest-first
-                               :dates (list newer older)))))
+                 (sns-roam--signal-history-layout 'not-newest-first
+                                                  (list newer older))))
              run (cdr run))))
 
 (defun sns-roam--history-anchor-in (top-level-children date)
@@ -860,7 +865,7 @@ that is not YYYY-MM-DD, for a note outside the reference layout (see
 `sns-roam--history-body' and `sns-roam--check-history-run'), or when
 TEXT is the text of two paragraphs.  Pure."
   (unless (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\'" date)
-    (signal 'sns-roam-bad-date (list :kind 'sns-roam-bad-date :date date)))
+    (sns-roam--signal-bad-date date))
   (let* ((texts (mapcar #'org-ml-to-trimmed-string
                         (sns-roam--history-body top-level-children)))
          (dates (mapcar #'sns-roam--history-line-date texts))
@@ -872,10 +877,7 @@ TEXT is the text of two paragraphs.  Pure."
          (anchor (if position (nth position texts) (car (last texts)))))
     (let ((count (seq-count (lambda (text) (string= text anchor)) texts)))
       (when (> count 1)
-        (signal 'sns-roam-match-count
-                (list :kind 'sns-roam-match-count
-                      :operation 'sns-roam-history-anchor
-                      :count count :anchor anchor))))
+        (sns-roam--signal-match-count count 'sns-roam-history-anchor anchor)))
     (list :anchor anchor :after (null position))))
 
 (defun sns-roam-history-anchor (id date)
@@ -941,9 +943,7 @@ between dash and =.org=. Errors if PATH doesn't match the
 expected shape."
   (let ((name (file-name-nondirectory path)))
     (unless (string-match "^\\([0-9]\\{14\\}-\\)\\(.+\\)\\.org$" name)
-      (signal 'sns-roam-malformed-note
-              (list :kind 'sns-roam-malformed-note
-                    :file path :missing 'roam-filename :name name)))
+      (sns-roam--signal-malformed-note 'roam-filename nil path nil name))
     (cons (match-string 1 name) (match-string 2 name))))
 
 (defun sns-roam-rename-file (id new-slug)
@@ -961,12 +961,9 @@ or the destination already exists."
          (new-name (concat prefix new-slug ".org"))
          (new-path (expand-file-name new-name dir)))
     (when (file-exists-p new-path)
-      (signal 'sns-roam-file-exists
-              (list :kind 'sns-roam-file-exists :id id :path new-path)))
+      (sns-roam--signal-file-exists id new-path))
     (when (string= old-path new-path)
-      (signal 'sns-roam-file-exists
-              (list :kind 'sns-roam-file-exists
-                    :id id :path new-path :slug new-slug)))
+      (sns-roam--signal-file-exists id new-path new-slug))
     (let ((buf (find-buffer-visiting old-path)))
       (rename-file old-path new-path)
       (when buf
@@ -982,8 +979,7 @@ capture template. Returns a plist (:id :title :file)."
   (sns-roam-set-keyword id "TITLE" new-title)
   (let* ((node    (org-roam-node-from-id id))
          (_       (unless node
-                    (signal 'sns-roam-unknown-id
-                            (list :kind 'sns-roam-unknown-id :id id))))
+                    (sns-roam--signal-unknown-id id)))
          (slug    (org-roam-node-slug node))
          (new-path (sns-roam-rename-file id slug)))
     (list :id id :title new-title :file new-path)))
@@ -1084,17 +1080,14 @@ Errors after indexing if ID does not resolve to the new file."
                               (cons section sibling-headlines)
                               "")))
     (when (file-exists-p path)
-      (signal 'sns-roam-file-exists
-              (list :kind 'sns-roam-file-exists :id id :path path)))
+      (sns-roam--signal-file-exists id path))
     ;; org-roam only warns when it indexes a node whose ID another
     ;; file already holds, and the ID keeps resolving to that file.
     ;; Refuse before writing, so a retried batch that reuses a
     ;; pre-minted ID cannot leave a second file claiming it.
     (let ((registered (sns-roam--registered-file id)))
       (when registered
-        (signal 'sns-roam-id-conflict
-                (list :kind 'sns-roam-id-conflict
-                      :id id :registered registered :path path))))
+        (sns-roam--signal-id-conflict id registered path)))
     (with-temp-buffer
       (insert content)
       (write-region (point-min) (point-max) path nil 'silent))
@@ -1105,9 +1098,7 @@ Errors after indexing if ID does not resolve to the new file."
     ;; the ID now resolves to the new file before reporting success.
     (let ((registered (sns-roam--registered-file id)))
       (unless (and registered (file-equal-p registered path))
-        (signal 'sns-roam-index-failure
-                (list :kind 'sns-roam-index-failure
-                      :id id :expected path :actual registered))))
+        (sns-roam--signal-index-failure id path registered)))
     (list :id id :title title :file path)))
 
 (defun sns-roam--meeting-title (series time)

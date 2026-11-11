@@ -89,13 +89,48 @@ database and no test touches the owner's slipbox or its database."
   "Return today's date as YYYY-MM-DD."
   (format-time-string "%Y-%m-%d"))
 
+(defvar sns-roam-test--raised nil
+  "Where `sns-roam-test--error-data' records what it asserts, or nil.
+`sns-roam-test--raised-by-suite' binds it to a cons whose car is the
+name of the test now running and whose cdr collects one entry per
+assertion: (TEST-NAME KIND DATA), DATA made portable by
+`sns-roam-test--portable'.  When nil, nothing is recorded.")
+
+(defun sns-roam-test--portable (value)
+  "Return VALUE with what differs between runs replaced by placeholders.
+In every string, the test's `org-roam-directory' becomes <roam>/, a
+generated UUID becomes <uuid> and a file name's timestamp prefix
+becomes <stamp>, so condition data from two runs compare equal."
+  (cond
+   ((stringp value)
+    (let ((text value))
+      (dolist (directory (delete-dups
+                          (list (file-name-as-directory org-roam-directory)
+                                (file-name-as-directory
+                                 (file-truename org-roam-directory)))))
+        (setq text (string-replace directory "<roam>/" text)))
+      (setq text (replace-regexp-in-string
+                  "[[:xdigit:]]\\{8\\}\\(?:-[[:xdigit:]]\\{4\\}\\)\\{3\\}-[[:xdigit:]]\\{12\\}"
+                  "<uuid>" text t t))
+      (replace-regexp-in-string "\\<[0-9]\\{14\\}-" "<stamp>-" text t t)))
+   ((consp value)
+    (cons (sns-roam-test--portable (car value))
+          (sns-roam-test--portable (cdr value))))
+   (t value)))
+
 (defun sns-roam-test--error-data (kind thunk)
   "Show that calling THUNK raises condition KIND, and return its data plist.
-The data must start with :kind, whose value is KIND."
+The data must start with :kind, whose value is KIND.  When
+`sns-roam-test--raised' collects, the assertion is recorded there."
   (let ((err (should-error (funcall thunk) :type kind)))
     (should (eq kind (car err)))
     (should (eq :kind (car (cdr err))))
     (should (eq kind (plist-get (cdr err) :kind)))
+    (when sns-roam-test--raised
+      (push (list (car sns-roam-test--raised)
+                  kind
+                  (sns-roam-test--portable (cdr err)))
+            (cdr sns-roam-test--raised)))
     (cdr err)))
 
 (defun sns-roam-test--should-have (data &rest expected)
@@ -152,6 +187,72 @@ The data must start with :kind, whose value is KIND."
   (should (equal '(:kind sns-roam-unknown-id :file "f" :id "raised")
                  (sns-roam--add-context '(:kind sns-roam-unknown-id :id "raised")
                                         '(:id "context" :file "f")))))
+
+;;; --- each kind declared once (slice 22) ---
+
+(defconst sns-roam-test--suite-readers
+  '(sns-roam-tests-raise-every-declared-kind
+    sns-roam-each-site-raises-the-data-slice-21-recorded)
+  "The tests that read what the rest of the suite raises.
+`sns-roam-test--raised-by-suite' leaves them out of its run, so
+neither runs itself.")
+
+(defvar sns-roam-test--suite-raised nil
+  "What `sns-roam-test--raised-by-suite' returned, once it has run.")
+
+(defun sns-roam-test--raised-by-suite ()
+  "Return (TEST-NAME KIND DATA) for each error the other tests assert.
+Runs every sns-roam test but `sns-roam-test--suite-readers', with
+nothing printed, once per Emacs.  The outer run still reports each of
+those tests, so one that fails there fails where a person sees it.
+Inside a running test `ert-running-test' names the outer test, so the
+listener records the name of each test as it starts."
+  (or sns-roam-test--suite-raised
+      (setq sns-roam-test--suite-raised
+            (let ((sns-roam-test--raised (list nil)))
+              (ert-run-tests `(and "\\`sns-roam-"
+                                   (not (member ,@sns-roam-test--suite-readers)))
+                             (lambda (event &rest arguments)
+                               (when (eq event 'test-started)
+                                 (setcar sns-roam-test--raised
+                                         (ert-test-name (nth 1 arguments))))))
+              (reverse (cdr sns-roam-test--raised))))))
+
+(ert-deftest sns-roam-tests-raise-every-declared-kind ()
+  ;; S22.2: a kind that no test raises shows up here by name.
+  (let ((raised (mapcar #'cadr (sns-roam-test--raised-by-suite))))
+    (should (equal nil (seq-difference sns-roam--error-kinds raised)))))
+
+(defconst sns-roam-test--slice-21-data-file
+  (expand-file-name "error-data-slice-21.eld"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "The data each slice 21 test saw raised before slice 22, made portable.
+Each entry is (TEST-NAME KIND DATA), recorded by
+`sns-roam-test--raised-by-suite' from the hand-written signal sites.")
+
+(defun sns-roam-test--pairs (plist)
+  "Return PLIST as a list of (KEY . VALUE) pairs."
+  (cl-loop for (key value) on plist by #'cddr collect (cons key value)))
+
+(ert-deftest sns-roam-each-site-raises-the-data-slice-21-recorded ()
+  ;; Each site raises the keys and values it did before slice 22.  Only
+  ;; their order after :kind may change, so the data compare as sets.
+  (let ((recorded (with-temp-buffer
+                    (insert-file-contents sns-roam-test--slice-21-data-file)
+                    (read (current-buffer))))
+        (raised (sns-roam-test--raised-by-suite)))
+    (should (= 34 (length recorded)))
+    (should (equal nil
+                   (seq-remove
+                    (lambda (entry)
+                      (seq-find
+                       (lambda (now)
+                         (and (equal (seq-take entry 2) (seq-take now 2))
+                              (seq-set-equal-p
+                               (sns-roam-test--pairs (nth 2 entry))
+                               (sns-roam-test--pairs (nth 2 now)))))
+                       raised))
+                    recorded)))))
 
 ;;; --- sns-roam-meeting-note ---
 
