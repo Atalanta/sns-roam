@@ -39,4 +39,4 @@ git config turnstile.base main
 git config turnstile.worker 'claude -p --output-format json --permission-mode acceptEdits --no-session-persistence --allowedTools "Bash(mise run tangle)" "Bash(mise run test)" "Bash(mise run check)" "Bash(emacs --batch *)" "Bash(git diff *)" "Bash(git status *)" "Bash(git log *)"'
 ```
 
-The worker's allowed tools let it tangle and run the tests, and nothing else in the shell. `turnstile land` opens merge requests with `glab`, which fails on this GitHub repository, so a change that passes the review and the check reaches `main` by a fast-forward merge and a push.
+The worker's allowed tools let it tangle and run the tests. They stop a worker from running commands such as `git push` by mistake. They do not stop a worker set on misuse, because `emacs --batch` can run any Lisp, shell commands included; turnstile guards against unreliable workers, not hostile ones. `turnstile land` opens merge requests with `glab`, which fails on this GitHub repository, so a change that passes the review and the check reaches `main` by a fast-forward merge and a push.
