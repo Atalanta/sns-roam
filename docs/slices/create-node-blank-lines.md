@@ -56,4 +56,4 @@ None.
 
 ## Done when
 
-The builder adds ert tests for S10.1, S10.2 and S10.3 and a test for a single paragraph to `test/sns-roam-test.el`. It shows S10.1 failing before the change, because the file holds "One.\nTwo.", then all four passing after it. Each test compares the file text from `#+title` to the end, so it would see a blank line added after `#+title` or before "* Head". The slice 9 tests still pass. `mise run check` and `mise run test` pass.
+The builder adds ert tests for S10.1, S10.2 and S10.3 and a test for a single paragraph to `test/sns-roam-test.el`. It shows S10.1 failing before the change, because the file holds "One.\nTwo.", then all four passing after it. Each test compares the file text from `:END:` to the end, so it would see a blank line added after `:END:`, after `#+title` or before "* Head". The slice 9 tests still pass. `mise run check` and `mise run test` pass.
