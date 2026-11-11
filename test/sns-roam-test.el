@@ -569,6 +569,40 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                            "* History\n2026-10-24: offered terms.\n")
                    (sns-roam-test--text-from-drawer-end file)))))
 
+(defconst sns-roam-test--table-between-prose
+  "Seats by year:\n| 2025 | 40 |\n| 2026 | 55 |\nPrices are per seat.\n"
+  "A body whose table has prose on both sides with no blank line between.")
+
+(ert-deftest sns-roam-insert-element-after-a-table-keeps-the-prose-apart ()
+  ;; Org joins a paragraph to the prose that follows it with no blank
+  ;; line, so the new paragraph must not inherit the table's zero.
+  (sns-roam-test--with-reference-note
+      sns-roam-test--table-between-prose
+    (sns-roam-insert-element "contract-id"
+                             (lambda (node) (org-ml-is-type 'table node))
+                             (org-ml-build-paragraph "Counts are at renewal.")
+                             t)
+    (should (equal '("Seats by year:"
+                     "| 2025 | 40 |\n| 2026 | 55 |"
+                     "Counts are at renewal."
+                     "Prices are per seat.")
+                   (sns-roam-test--element-texts
+                    (sns-roam-body-elements "contract-id"))))))
+
+(ert-deftest sns-roam-insert-element-before-a-table-keeps-the-prose-apart ()
+  ;; The paragraph before the anchor is the new element's other neighbour.
+  (sns-roam-test--with-reference-note
+      sns-roam-test--table-between-prose
+    (sns-roam-insert-element "contract-id"
+                             (lambda (node) (org-ml-is-type 'table node))
+                             (org-ml-build-paragraph "Counts are at renewal."))
+    (should (equal '("Seats by year:"
+                     "Counts are at renewal."
+                     "| 2025 | 40 |\n| 2026 | 55 |"
+                     "Prices are per seat.")
+                   (sns-roam-test--element-texts
+                    (sns-roam-body-elements "contract-id"))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.

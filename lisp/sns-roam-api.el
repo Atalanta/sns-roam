@@ -447,17 +447,32 @@ through `sns-roam--update-section'. Returns (:id :file)."
 AFTER non-nil places it after ANCHOR, nil before.  The first of the
 pair takes post-blank 1, and the second takes the post-blank ANCHOR
 had, so the spacing after the pair is what followed ANCHOR before.
+That second post-blank is at least 1 when a child follows.  The body
+child in front of an inserted-before pair also gets at least 1.  Org
+joins a paragraph to prose or a table with no blank line between.
 Every other child is returned as it was.  Pure."
-  (let ((anchor-blank (org-ml-get-property :post-blank anchor)))
-    (mapcan (lambda (child)
-              (cond
-               ((not (eq child anchor)) (list child))
-               (after (list (org-ml-set-property :post-blank 1 child)
-                            (org-ml-set-property :post-blank anchor-blank
-                                                 new-element)))
-               (t (list (org-ml-set-property :post-blank 1 new-element)
-                        child))))
-            children)))
+  (let ((anchor-blank (org-ml-get-property :post-blank anchor))
+        (at-least-one (lambda (node)
+                        (org-ml-set-property
+                         :post-blank
+                         (max 1 (org-ml-get-property :post-blank node))
+                         node))))
+    (cl-mapcan
+     (lambda (child next)
+       (cond
+        ((and (eq child anchor) after)
+         (let ((pair-end (org-ml-set-property :post-blank anchor-blank
+                                              new-element)))
+           (list (org-ml-set-property :post-blank 1 child)
+                 (if next (funcall at-least-one pair-end) pair-end))))
+        ((eq child anchor)
+         (list (org-ml-set-property :post-blank 1 new-element) child))
+        ((and (eq next anchor) (not after)
+              (not (sns-roam--section-header-p child)))
+         (list (funcall at-least-one child)))
+        (t (list child))))
+     children
+     (append (cdr children) (list nil)))))
 
 (defun sns-roam-insert-element (id pred new-element &optional after)
   "Insert NEW-ELEMENT beside the unique body element of node ID matching PRED.
