@@ -1,18 +1,73 @@
 #+TITLE: sns-roam
 
-An Emacs Lisp bridge between Claude and an org-roam slipbox.
+sns-roam lets Claude Code read and write the notes in an org-roam slipbox. It is an Emacs Lisp library of =sns-roam-*= functions, which Claude calls in your running Emacs through =emacsclient=, and two Claude Code skills that use them:
 
-* What is here
+- =roam-fetch= answers questions from your notes and cites the notes it used. It never changes a note.
+- =roam-distill= turns a thinking session into new notes, links them to the notes you already have, and adds dated lines to reference notes. It shows every change and writes only after you confirm.
 
-- =src/roam-api.org=: read primitives (find by metadata, body search, expand, excerpt) and mutation primitives (set body, append link, replace element, set property or keyword, rename, create node, meeting note).
-- =lisp/=: the tangled Emacs Lisp, which =mise run tangle= generates and git tracks.
-- =skills/=: the =roam-fetch= and =roam-distill= Claude skills.
-- =docs/design/=: design drafts for a generic org-ml editing bridge.
+The functions parse notes with org-ml and change only the elements an edit touches, so the rest of a note keeps the text you typed.
 
-* Working on it
+* How to install sns-roam and the roam skills
 
-Edit the org files in =src/=, then run =mise run tangle=. =mise run check= fails if the committed =lisp/= has drifted from its source.
+You need Emacs 31.1 or later, org-roam with =org-roam-directory= set, and Claude Code.
 
-* Status
+1. Install the library from GitHub:
 
-The history of =src/roam-api.org= comes from =~/.emacs.d=. Emacs loads =sns-roam-meeting-note= from this repository on first use, through a =use-package= block in =~/.emacs.d/README.org=. The Claude skills =roam-fetch= and =roam-distill= live in =skills/=, linked from =~/.claude/skills=, and load =lisp/sns-roam-api.el= from here. They load only when the primitives are unbound, so after a fix reload with the skill's load command or restart Emacs. The copies in =~/.emacs.d/sns-emacs-modules= stay in place, unused by the skills.
+   #+begin_src emacs-lisp
+   (package-vc-install '(sns-roam-api :url "https://github.com/Atalanta/sns-roam"))
+   #+end_src
+
+   The package is called =sns-roam-api=, after its main file, so give the name as well as the URL.
+
+2. Start the Emacs server, by adding =(server-start)= to your init file or running =M-x server-start=. Check that Claude can reach it:
+
+   #+begin_src sh
+   emacsclient -e '(+ 1 1)'
+   #+end_src
+
+   This prints =2=.
+
+3. If org-roam has never indexed your notes on this machine, run =M-x org-roam-db-sync=.
+
+4. Link the skills from the installed package into Claude Code:
+
+   #+begin_src sh
+   ln -s ~/.emacs.d/elpa/sns-roam-api/skills/roam-fetch ~/.claude/skills/roam-fetch
+   ln -s ~/.emacs.d/elpa/sns-roam-api/skills/roam-distill ~/.claude/skills/roam-distill
+   #+end_src
+
+   Use your =package-user-dir= in place of =~/.emacs.d/elpa= if you have changed it.
+
+5. Add your own conventions to your Claude instructions, such as =~/.claude/CLAUDE.md=:
+
+   #+begin_src markdown
+   ## Roam conventions
+
+   - My organisation is Atalanta Systems. People inside it stay as plain names in roam notes. People outside it get person notes.
+   #+end_src
+
+   Without this section, =roam-distill= gives every person you name a person note and asks when it is unsure.
+
+6. Ask Claude a question your notes can answer, such as "what do my roam notes say about tide tables?". Claude loads the library, names your =org-roam-directory= as the slipbox, and answers with a "Note references:" list.
+
+To update later, run =M-x package-vc-upgrade= and choose =sns-roam-api=, then restart Emacs. The skill links point into the package, so they update with it.
+
+* What is in the repository
+
+- =src/roam-api.org=: the literate source of the library.
+- =lisp/sns-roam-api.el=: the Emacs Lisp tangled from it. It is committed because =package-vc-install= installs it as it is.
+- =skills/roam-fetch/= and =skills/roam-distill/=: the two Claude Code skills.
+- =test/sns-roam-test.el=: the ert tests.
+- =docs/slices/=: the plan for each change since November 2026. =docs/design/= holds older design drafts.
+
+* Working on sns-roam
+
+Edit =src/roam-api.org=, never =lisp/=. Then run:
+
+#+begin_src sh
+mise run tangle   # rewrite lisp/ from src/
+mise run test     # run the ert tests
+mise run check    # fail if the committed lisp/ differs from src/
+#+end_src
+
+The tests load org-roam and org-ml from =~/.emacs.d/elpa=. =AGENTS.md= holds the rules for changes, for people and for coding agents.

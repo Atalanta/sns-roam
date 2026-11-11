@@ -20,3 +20,10 @@ An Emacs Lisp bridge between Claude and an org-roam slipbox. It has read primiti
 - Functions take and return plists. Edits to a note's body go through the single write boundary, `sns-roam--update-section`.
 - Failure is loud. An unknown ID or a match that isn't unique raises an error with the `sns-roam:` prefix, and no code path guesses.
 - When you change the body of a parsed org-ml section, map over the full child list and filter it. Don't slice it into sublists and join them again, because that corrupts the buffer positions org-ml reconciles against.
+
+## The owner's machine
+
+- Emacs loads sns-roam from this checkout, through a `use-package` block in `~/.emacs.d/README.org`, so `(require 'sns-roam-api)` finds `lisp/` here.
+- The skills in `~/.claude/skills` are links to `skills/` in this checkout.
+- After changing `lisp/`, reload it in the running Emacs: `emacsclient -e '(load-library "sns-roam-api")'`.
+- The history of `src/roam-api.org` comes from `~/.emacs.d`. Old copies there, in `roam-api.org`, `roam-import.org` and `sns-emacs-modules/`, are unused.
