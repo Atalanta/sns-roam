@@ -9,7 +9,7 @@ description: |
   the read pipeline, links them, and writes via the `sns-roam-*` elisp
   primitives. Show → confirm → apply, mirroring `aldi-agent-patcher`.
   Not for reading (use `roam-fetch`); not for the GTD graph (use
-  `aldi-agent-patcher`); not for vault import (that's the importer pipeline).
+  `aldi-agent-patcher`).
 when_to_use: |
   User has done exploratory thinking (a BWC with Claude, or a BWJ dump
   they paste) and wants the durable ideas captured in the slipbox as
@@ -29,7 +29,6 @@ allowed-tools: Bash, Read, Write
 **Do NOT activate for:**
 - Read questions about the slipbox — use `roam-fetch`
 - GTD graph mutations — use `aldi-agent-patcher` (different graph)
-- Importing markdown vaults — that's the importer pipeline, not Claude-facing
 
 ---
 

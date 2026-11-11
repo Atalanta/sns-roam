@@ -1,11 +1,11 @@
 # sns-roam
 
-An Emacs Lisp bridge between Claude and an org-roam slipbox. It has read primitives, mutation primitives built on org-ml, and an importer from an Obsidian vault.
+An Emacs Lisp bridge between Claude and an org-roam slipbox. It has read primitives and mutation primitives built on org-ml.
 
 ## Layout
 
-- `src/roam-api.org` and `src/roam-import.org` are the literate sources.
-- `lisp/sns-roam-api.el` and `lisp/sns-roam-import.el` are tangled from them and committed.
+- `src/roam-api.org` is the literate source.
+- `lisp/sns-roam-api.el` is tangled from it and committed.
 - `docs/design/` holds the design notes for a generic org-ml editing bridge. They are drafts, and the code doesn't implement them yet.
 
 ## Commands

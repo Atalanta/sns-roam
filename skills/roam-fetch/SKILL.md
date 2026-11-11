@@ -8,8 +8,7 @@ description: |
   → expand → excerpt) over the `sns-roam-*` elisp primitives in the
   user's emacs. Read-only; never mutates the slipbox. Not for the GTD
   graph (use `aldi-agent-navigator`); not for writes (use `roam-distill`
-  when it exists); not for vault import (that's the importer pipeline,
-  not a Claude-facing skill).
+  when it exists).
 when_to_use: |
   User asks an information question that the slipbox might answer:
   status of an idea, what's been written about a topic, what notes a
@@ -35,7 +34,6 @@ allowed-tools: Bash, Read, Write
 - Any mutation request ("rewrite this note", "add a note about X",
   "merge these two") — hand off to `roam-distill` when it exists, or
   decline and surface the user's intent
-- Importing markdown — that's the importer pipeline, not Claude-facing
 
 ---
 
