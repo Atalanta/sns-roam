@@ -1,8 +1,8 @@
-# Slice 23: a note narrowed in Emacs reads and edits as the whole note
+# Slice 23: a note narrowed in Emacs reads and edits as if it were not narrowed
 
 ## Goal
 
-When the user has a note narrowed in Emacs, Claude reads and edits the whole note through sns-roam, and the user's narrowing is still in place afterwards.
+When the user has a note narrowed in Emacs, Claude reads and edits all of the note through sns-roam, and the user's narrowing is still in place afterwards.
 
 ## Who uses it the day it lands
 
@@ -51,4 +51,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` has tests that narrow a note to `* History` and call `sns-roam-body-elements`, `sns-roam-history-anchor`, `sns-roam-set-body` and `sns-roam-replace-element`. Each shows the whole note read or edited, and `(point-min) . (point-max)` afterwards equal to a fresh `org-narrow-to-subtree` on `* History`. A test narrows to the top paragraph itself, edits it, and shows the narrowing still covers the new paragraph. The builder shows the read and edit tests failing on `main`. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` has tests that narrow a note to `* History` and call `sns-roam-body-elements`, `sns-roam-history-anchor`, `sns-roam-set-body` and `sns-roam-replace-element`. Each shows the text outside the narrowing read or edited, and `(point-min) . (point-max)` afterwards equal to a fresh `org-narrow-to-subtree` on `* History`. A test narrows to `* History`, calls `sns-roam-replace-element` with a predicate that matches two paragraphs, and shows the refusal with the buffer unmodified and still narrowed to `* History`. A test narrows to the top paragraph itself, edits it, and shows the narrowing still covers the new paragraph. The builder shows the read and edit tests failing on `main`. `mise run check` and `mise run test` pass.
