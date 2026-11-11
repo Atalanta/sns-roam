@@ -388,11 +388,16 @@ through `emacsclient`. Before the first call in a session, load the API
 and ask where the slipbox is:
 
 ```sh
-emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory) (list :loaded nil))'
+emacsclient -e '(if (require (quote sns-roam-api) nil t) (list :loaded t :slipbox org-roam-directory :indexed (length (org-roam-node-list))) (list :loaded nil))'
 ```
 
-- `(:loaded t :slipbox DIR)`: the API is loaded and DIR is the slipbox.
-  Name DIR when you report where you looked.
+- `(:loaded t :slipbox DIR :indexed N)`: the API is loaded, DIR is the
+  slipbox, and org-roam's database knows N notes. Name DIR when you
+  report where you looked.
+- `:indexed 0`: org-roam has not indexed the slipbox yet, so every
+  search would come back empty. Stop, and tell the user to run
+  `M-x org-roam-db-sync` (or enable `org-roam-db-autosync-mode`), then
+  ask again.
 - `(:loaded nil)`: sns-roam is not installed in this Emacs. Stop, and
   tell the user to install it, then ask again:
 
