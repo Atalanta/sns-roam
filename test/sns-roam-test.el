@@ -537,9 +537,9 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
       "Edition: Pro.\n\nOpen: renewal date.\n"
     (sns-roam-insert-element "contract-id"
                              (sns-roam-test--containing "Edition")
-                             (org-ml-build-paragraph "Vendor: Acme."))
+                             (org-ml-build-paragraph "Vendor: Atalanta Systems."))
     (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
-                           "Vendor: Acme.\n\nEdition: Pro.\n\n"
+                           "Vendor: Atalanta Systems.\n\nEdition: Pro.\n\n"
                            "Open: renewal date.\n")
                    (sns-roam-test--text-from-drawer-end file)))))
 
