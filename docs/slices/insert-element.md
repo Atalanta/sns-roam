@@ -18,15 +18,12 @@ Each event adds a history line, so the owner adds one several times a week. Toda
 
 ## Out of scope
 
-- Inserting under a headline (issue #2).
-- A diff in the return value (issue #10), and the full reference-note update flow (issue #9).
-- Inserting next to the property drawer or a `#+` line. The anchor can only be a body element.
+- Inserting under a headline (issue #2), a diff in the return value (issue #10), and the full reference-note update flow (issue #9).
 
 ## Invariants
 
-- Every body element other than the new one keeps its text. A call that rewrote a neighbour would repeat the 2026-11-10 loss (issue #10).
+- Every body element other than the new one keeps its text, and the edit maps over the full child list through `sns-roam--update-section`. A call that rewrote a neighbour would repeat the 2026-11-10 loss (issue #10, AGENTS.md rules on the write boundary and parsed child lists).
 - A predicate that matches no element or more than one raises an `sns-roam:` error and the file is unchanged (AGENTS.md: failure is loud, no code path guesses).
-- The edit maps over the full child list through `sns-roam--update-section` (AGENTS.md rules on the write boundary and on parsed child lists).
 - `lisp/*.el` stays in step with `src/*.org` (AGENTS.md, `mise run check`).
 
 ## Scenarios
@@ -50,7 +47,7 @@ Scenario: S12.3 An anchor that matches two paragraphs is refused
 
 - The new public function is `sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER` in `src/roam-api.org`, returning `(:id :file)` (issue #8). PRED sees only body elements, never the drawer or `#+` keywords (`sns-roam--section-header-p`, line 591).
 - `sns-roam-replace-element` (near line 850) counts matches with `org-ml-match` and edits through `sns-roam--update-section`. `sns-roam--map-children` (line 596) explains why the child list must be filtered and mapped whole, never sliced.
-- Slice 10 set the spacing rule: one blank line between body elements, none after `#+title` and none before the first headline (`:post-blank`).
+- Spacing (`:post-blank`): one blank line separates the new element from its anchor. The blank lines that followed the pair before the call still follow it, so extra spacing slice 10 keeps survives, and none appears before the first headline.
 - In `skills/roam-distill/SKILL.md`, the Write list gains the function, and step 2 of "The transform flow" names it for adding one element.
 
 ## Questions to resolve
@@ -59,4 +56,4 @@ None.
 
 ## Done when
 
-The builder adds ert tests to `test/sns-roam-test.el` for S12.1, S12.2 and S12.3, and one for inserting before the first body element. S12.1 and S12.2 compare the file text from `:END:` to the end. S12.3 compares the file's bytes before and after. The builder runs S12.3 through a file-and-load script, as the skill describes, and shows the error text it writes to the `.out` file. `mise run check` and `mise run test` pass.
+The builder adds ert tests to `test/sns-roam-test.el` for S12.1, S12.2 and S12.3, and one for inserting before the first body element. S12.1 and S12.2 compare the file text from `:END:` to the end. S12.3 and a test whose predicate matches nothing compare the file's bytes before and after and show the `sns-roam:` error. A test inserts after a paragraph with two blank lines after it and shows one blank line before the new paragraph and two after it. The builder runs S12.3 through a file-and-load script, as the skill describes, and shows the error text it writes to the `.out` file. The owner reads the skill's diff and sees the Write list entry and the step 2 choice for adding one element. `mise run check` and `mise run test` pass.
