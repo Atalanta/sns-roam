@@ -990,12 +990,12 @@ to.  Kills every note buffer afterwards, under its old or new name."
                      (file-truename
                       (eval (car (get 'org-roam-db-location 'standard-value)))))))
 
-;;; --- files that do not end with a newline ---
+;;; --- a change to the blank lines alone keeps the typed text (slice 19) ---
 
-(defmacro sns-roam-test--with-unterminated-note (text &rest body)
-  "Run BODY with `file' bound to a registered note whose text is TEXT.
-TEXT has no final newline.  The note's ID is \"bare-id\", and a note
-with ID \"other-id\" is there to link to."
+(defmacro sns-roam-test--with-bare-note (text &rest body)
+  "Run BODY with `file' and `before' bound for a registered note whose text is TEXT.
+The note's ID is \"bare-id\", and `before' is its text.  A note with
+ID \"other-id\" is there to link to."
   (declare (indent 1))
   `(sns-roam-test--with-roam-dir
      (let ((file (expand-file-name "bare.org" org-roam-directory)))
@@ -1003,26 +1003,107 @@ with ID \"other-id\" is there to link to."
        (sns-roam-test--register
         (expand-file-name "other.org" org-roam-directory)
         ":PROPERTIES:\n:ID: other-id\n:END:\n#+title: Other\n")
-       (unwind-protect (progn ,@body)
-         (mapc #'sns-roam-test--kill-file-buffer
-               (directory-files org-roam-directory t "\\.org\\'"))))))
+       (let ((before (sns-roam-test--file-text file)))
+         (ignore before)
+         (unwind-protect (progn ,@body)
+           (mapc #'sns-roam-test--kill-file-buffer
+                 (directory-files org-roam-directory t "\\.org\\'")))))))
+
+(ert-deftest sns-roam-append-link-keeps-a-typed-source-block ()
+  ;; S19.1.  On 2026-11-11 the block came back as `#+begin_src sh' with
+  ;; its body indented, because it gained a blank line (issue #17).
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n#+BEGIN_SRC sh\necho hi\n#+END_SRC\n"
+    (sns-roam-append-link "bare-id" "other-id" "Other" "See " ".")
+    (should (equal '(:removed () :added ("See [[id:other-id][Other]]." ""))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))
+    (should (equal (concat before "\nSee [[id:other-id][Other]].\n")
+                   (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-insert-element-after-a-typed-table ()
+  ;; S19.2.  The table gains a blank line and keeps `|a|b|'.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\nIntro.\n\n|a|b|\nOutro.\n"
+    (sns-roam-insert-element "bare-id"
+                             (sns-roam-test--containing "| a | b |")
+                             (org-ml-build-paragraph "New.")
+                             t)
+    (should (equal '(:removed () :added ("" "New." ""))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))
+    (should (equal ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\nIntro.\n\n|a|b|\n\nNew.\n\nOutro.\n"
+                   (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-update-section-writes-a-changed-element-in-org-form ()
+  ;; Out of scope for slice 19: an element whose content changes as
+  ;; well as its blank lines is still written as org prints it.
+  (sns-roam-test--with-typed-note
+    (sns-roam--update-section
+     "typed-id"
+     (lambda (section)
+       (sns-roam--map-children
+        (lambda (children)
+          (mapcar (lambda (child)
+                    (if (org-ml-is-type 'src-block child)
+                        ;; Not `org-ml->>', which edits the parse in place.
+                        (org-ml-set-property
+                         :post-blank 2
+                         (org-ml-set-property :value "echo bye\n" child))
+                      child))
+                  children))
+        section)))
+    (should (equal '(:removed ("#+BEGIN_SRC sh" "echo hi" "#+END_SRC")
+                     :added ("#+begin_src sh" "  echo bye" "#+end_src" ""))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-section-edits-write-only-new-blank-lines ()
+  ;; A child whose only change is its :post-blank gets one edit, which
+  ;; replaces the blank lines after its last non-blank character with
+  ;; those `org-ml-to-string' prints for the new :post-blank.
+  (with-temp-buffer
+    (insert sns-roam-test--typed-note)
+    (let* ((section (car (org-ml-get-children (org-ml-parse-this-buffer))))
+           (table-p (lambda (node) (org-ml-is-type 'table node)))
+           (table (seq-find table-p (org-ml-get-children section)))
+           (spaced-table (org-ml-set-property :post-blank 2 table))
+           (printed (org-ml-to-string spaced-table))
+           (edits (sns-roam--section-edits
+                   (org-ml-get-children section)
+                   (mapcar (lambda (child)
+                             (if (eq child table) spaced-table child))
+                           (org-ml-get-children section))))
+           (edit (car edits))
+           (begin (sns-roam--edit-begin edit)))
+      (should (= 1 (length edits)))
+      (should (equal "\n\n" (plist-get edit :text)))
+      (should (string-suffix-p (plist-get edit :text) printed))
+      (should (string-suffix-p "|\n" (string-remove-suffix (plist-get edit :text)
+                                                          printed)))
+      (should (= (org-ml-get-property :end table) (plist-get edit :end)))
+      (should (equal "|\n" (buffer-substring-no-properties (- begin 2) begin)))
+      (should (string-blank-p (buffer-substring-no-properties
+                               begin (plist-get edit :end)))))))
+
+;;; --- files that do not end with a newline ---
+
+(defmacro sns-roam-test--with-unterminated-note (text &rest body)
+  "Run BODY with `file' bound to a registered note whose text is TEXT.
+TEXT has no final newline; see `sns-roam-test--with-bare-note'."
+  (declare (indent 1))
+  `(sns-roam-test--with-bare-note ,text ,@body))
 
 (ert-deftest sns-roam-append-link-after-an-unterminated-source-block ()
   ;; The review of slice 14 wrote `#+END_SRCSee [[id:y][Y]].' here.
+  ;; The block gains only a blank line, so it keeps its typed text.
   (sns-roam-test--with-unterminated-note
       ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n#+BEGIN_SRC sh\necho hi\n#+END_SRC"
-    ;; The block gains a blank line after it, so it counts as changed and
-    ;; is written in org's form; it must still be a source block.
     (sns-roam-append-link "bare-id" "other-id" "Other" "See " ".")
-    (should (equal '((src-block "echo hi")
-                     (paragraph "See [[id:other-id][Other]]."))
-                   (mapcar (lambda (node)
-                             (list (org-ml-get-type node)
-                                   (if (org-ml-is-type 'src-block node)
-                                       (string-trim (org-ml-get-property :value node))
-                                     (org-ml-to-trimmed-string node))))
-                           (plist-get (sns-roam-body-elements "bare-id")
-                                      :elements))))))
+    (should (equal (concat ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n"
+                           "#+BEGIN_SRC sh\necho hi\n#+END_SRC\n\n"
+                           "See [[id:other-id][Other]].\n")
+                   (sns-roam-test--file-text file)))))
 
 (ert-deftest sns-roam-set-body-after-an-unterminated-title ()
   ;; The review of slice 14 wrote `#+title: XNew body.' here.

@@ -387,72 +387,128 @@ Returns (:id :file). Errors loudly on unknown ID or malformed file."
 (defun sns-roam--kept-index (old-children start child)
   "Return the index in OLD-CHILDREN of the child CHILD leaves unchanged, or nil.
 The match is at index START or later, has CHILD's :begin position,
-and prints to the same `org-ml-to-string' text.  A built node has no
-:begin, so it never matches.  Pure."
+and prints to the same `org-ml-to-string' text once CHILD's
+:post-blank is set to the match's.  A child whose only change is its
+blank lines is therefore kept, and `sns-roam--blank-lines-text' gives
+the blank lines to write.  A built node has no :begin, so it never
+matches.  Pure."
   (when-let* ((begin (org-ml-get-property :begin child)))
     (cl-position-if (lambda (old-child)
                       (and (eql begin (org-ml-get-property :begin old-child))
                            (string= (org-ml-to-string old-child)
-                                    (org-ml-to-string child))))
+                                    (org-ml-to-string
+                                     (org-ml-set-property
+                                      :post-blank
+                                      (org-ml-get-property :post-blank old-child)
+                                      child)))))
                     old-children
                     :start start)))
 
-(defun sns-roam--run-edit (old-children from to new-nodes)
+(defun sns-roam--blank-lines-text (old-child child)
+  "Return the blank lines `org-ml-to-string' prints after CHILD, or nil.
+Nil means CHILD has as many blank lines as OLD-CHILD, the parsed
+child it keeps, so none are written.  Otherwise the text is what
+`org-ml-to-string' prints for CHILD past what it prints for CHILD
+with no blank lines.  Pure."
+  (unless (eql (org-ml-get-property :post-blank old-child)
+               (org-ml-get-property :post-blank child))
+    (let ((printed (org-ml-to-string child))
+          (content (org-ml-to-string (org-ml-set-property :post-blank 0 child))))
+      (unless (string-prefix-p content printed)
+        (error "sns-roam: org prints a %s with blank lines as other text"
+               (org-ml-get-type child)))
+      (substring printed (length content)))))
+
+(defun sns-roam--run-edit (old-children from to new-nodes blank-lines)
   "Return the edit that replaces OLD-CHILDREN from index FROM up to TO with NEW-NODES.
 The edit is (:begin B :end E :text TEXT), where TEXT is the
 `org-ml-to-string' text of NEW-NODES.  B is where the child at FROM
 begins, or where the last child ends when FROM is past the end.  E is
 where the child before TO ends, or B when the run removes no child.
 A section's children follow each other with no text between them, so
-these bounds cover exactly the removed children.  Returns nil when
-the run removes nothing and adds nothing.  Pure."
-  (when (or (< from to) new-nodes)
-    (let ((begin (if (< from (length old-children))
-                     (org-ml-get-property :begin (nth from old-children))
-                   (org-ml-get-property :end (car (last old-children))))))
-      (list :begin begin
-            :end   (if (< from to)
-                       (org-ml-get-property :end (nth (1- to) old-children))
-                     begin)
-            :text  (mapconcat #'org-ml-to-string new-nodes "")))))
+these bounds cover exactly the removed children.
+BLANK-LINES, when non-nil, are the new blank lines of the kept child
+before FROM, which ends at B.  The edit then starts where that
+child's blank lines start, a buffer fact, so it carries
+:blank-lines-end B in place of :begin, and TEXT starts with
+BLANK-LINES.  One edit covers both, so the blank lines and the run
+are written in order at the same place.
+Returns nil when the edit would remove and add nothing.  Pure."
+  (when (or blank-lines (< from to) new-nodes)
+    (let* ((begin (if (< from (length old-children))
+                      (org-ml-get-property :begin (nth from old-children))
+                    (org-ml-get-property :end (car (last old-children)))))
+           (end   (if (< from to)
+                      (org-ml-get-property :end (nth (1- to) old-children))
+                    begin))
+           (text  (mapconcat #'org-ml-to-string new-nodes "")))
+      (if blank-lines
+          (list :blank-lines-end begin :end end :text (concat blank-lines text))
+        (list :begin begin :end end :text text)))))
 
 (defun sns-roam--section-edits (old-children new-children)
   "Return the edits that turn the text of OLD-CHILDREN into NEW-CHILDREN.
 OLD-CHILDREN are a section's parsed children; NEW-CHILDREN are the
 children a transform returned for it.  Each new child that
-`sns-roam--kept-index' finds unchanged keeps its typed text.  Each run
-of other children between two kept ones becomes one edit from
-`sns-roam--run-edit'.  The edits come last in the buffer first, so
-making them in order leaves the positions of the rest as the parse
-gave them.  Pure."
+`sns-roam--kept-index' finds unchanged keeps its typed text, apart
+from blank lines it gains or loses.  Each run of other children
+between two kept ones becomes one edit from `sns-roam--run-edit',
+which also writes the new blank lines of the kept child before it.
+The edits come last in the buffer first, so making them in order
+leaves the positions of the rest as the parse gave them.  Pure."
   (let ((from 0)
         (pending-new-nodes nil)
+        (blank-lines nil)
         (edits nil))
     (dolist (child new-children)
       (if-let* ((kept (sns-roam--kept-index old-children from child)))
           (progn
             (push (sns-roam--run-edit old-children from kept
-                                      (reverse pending-new-nodes))
+                                      (reverse pending-new-nodes)
+                                      blank-lines)
                   edits)
-            (setq from (1+ kept)
+            (setq blank-lines (sns-roam--blank-lines-text
+                               (nth kept old-children) child)
+                  from (1+ kept)
                   pending-new-nodes nil))
         (push child pending-new-nodes)))
     (push (sns-roam--run-edit old-children from (length old-children)
-                              (reverse pending-new-nodes))
+                              (reverse pending-new-nodes)
+                              blank-lines)
           edits)
     (delq nil edits)))
 
+(defun sns-roam--blank-lines-begin (end)
+  "Return where the blank lines that end at END begin in the current buffer.
+That is the start of the line after the last one before END with a
+non-blank character, or END when that line has no newline.  Trailing
+spaces on that line stay where they are."
+  (save-excursion
+    (goto-char end)
+    (skip-chars-backward " \t\n")
+    (forward-line 1)
+    (min end (point))))
+
+(defun sns-roam--edit-begin (edit)
+  "Return where EDIT starts in the current buffer.
+That is its :begin, or for an edit with :blank-lines-end, where those
+blank lines begin."
+  (if-let* ((blank-lines-end (plist-get edit :blank-lines-end)))
+      (sns-roam--blank-lines-begin blank-lines-end)
+    (plist-get edit :begin)))
+
 (defun sns-roam--apply-edits (edits)
   "Make EDITS from `sns-roam--section-edits' in the current buffer, in order.
-Each edit replaces the text between its :begin and :end with its
-:text.  EDITS come last in the buffer first, so each one leaves the
-positions of those still to come as the parse gave them.
+Each edit replaces the text between `sns-roam--edit-begin' and its
+:end with its :text.  EDITS come last in the buffer first, so each
+one leaves the positions of those still to come as the parse gave
+them.
 A file need not end with a newline, so an edit that writes after a
 last line without one starts a new line first; otherwise the new
 text would join that line and change what it parses as."
   (save-excursion
     (dolist (edit edits)
-      (let ((begin (plist-get edit :begin))
+      (let ((begin (sns-roam--edit-begin edit))
             (text  (plist-get edit :text)))
         (delete-region begin (plist-get edit :end))
         (goto-char begin)
