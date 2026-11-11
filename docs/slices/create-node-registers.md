@@ -45,7 +45,7 @@ Scenario: S9.2 A new note's links show as backlinks at once
 - `sns-roam-create-node` is in `src/roam-api.org` near line 1080. It writes the file with `write-region` and returns `(:id :title :file)`.
 - Every edit primitive resolves the ID through `sns-roam--node-file-or-error` (line 460), which calls `org-roam-node-from-id`, which reads the database.
 - `org-roam-db-update-file FILE-PATH` is at `~/.emacs.d/elpa/org-roam-20260425.1623/org-roam-db.el` line 559. It indexes the file's nodes and links.
-- The database file is `org-roam-db-location`, by default `~/.emacs.d/org-roam.db`. The test file sets it to a path in a temporary directory when it loads, before any test runs, and each test closes the connection afterwards with `org-roam-db--close`.
+- The database file is `org-roam-db-location`, by default `~/.emacs.d/org-roam.db`. `mise run test` starts Emacs with `--quick`, so `test/sns-roam-test.el` is the first code to load org-roam. Today the test file does not set the location. Setting it to a temporary path before `(require 'org-roam)` keeps the default from ever being the value, because `defcustom` keeps a value set before it runs. Each test closes the connection with `org-roam-db--close`.
 - `sns-roam-meeting-note` calls `sns-roam-create-node`, so its notes become registered too.
 
 ## Questions to resolve
@@ -54,4 +54,4 @@ None.
 
 ## Done when
 
-The builder adds ert tests for S9.1 and S9.2 to `test/sns-roam-test.el`, runs them before the change and shows S9.1 failing with `sns-roam: no roam node with id`, then shows both passing after it. A third test registers an existing note, creates a note at the same path, and sees the overwrite error. It then shows the existing file byte-identical, `org-roam-node-from-id` still resolving the existing ID to that file, and no row for the ID it passed. A fourth test shows `org-roam-db-location` is under the temporary directory and differs from the default, so no test, setup included, opens the owner's database. The owner's `~/.emacs.d/org-roam.db` modification time is the same before and after `mise run test`. `mise run check` and `mise run test` pass.
+The builder adds ert tests for S9.1 and S9.2 to `test/sns-roam-test.el`, runs them before the change and shows S9.1 failing with `sns-roam: no roam node with id`, then shows both passing after it. A third test registers an existing note, creates a note at the same path, and sees the overwrite error. It then shows the existing file byte-identical, the rows of every database table equal to those before the call, and no row for the ID it passed. A fourth test shows `org-roam-db-location` is the temporary path the test file set before loading org-roam, so nothing in the run, setup included, could open the owner's database. The owner's `~/.emacs.d/org-roam.db` modification time is the same before and after `mise run test`. `mise run check` and `mise run test` pass.
