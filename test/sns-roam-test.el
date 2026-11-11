@@ -990,5 +990,79 @@ to.  Kills every note buffer afterwards, under its old or new name."
                      (file-truename
                       (eval (car (get 'org-roam-db-location 'standard-value)))))))
 
+;;; --- files that do not end with a newline ---
+
+(defmacro sns-roam-test--with-unterminated-note (text &rest body)
+  "Run BODY with `file' bound to a registered note whose text is TEXT.
+TEXT has no final newline.  The note's ID is \"bare-id\", and a note
+with ID \"other-id\" is there to link to."
+  (declare (indent 1))
+  `(sns-roam-test--with-roam-dir
+     (let ((file (expand-file-name "bare.org" org-roam-directory)))
+       (sns-roam-test--register file ,text)
+       (sns-roam-test--register
+        (expand-file-name "other.org" org-roam-directory)
+        ":PROPERTIES:\n:ID: other-id\n:END:\n#+title: Other\n")
+       (unwind-protect (progn ,@body)
+         (mapc #'sns-roam-test--kill-file-buffer
+               (directory-files org-roam-directory t "\\.org\\'"))))))
+
+(ert-deftest sns-roam-append-link-after-an-unterminated-source-block ()
+  ;; The review of slice 14 wrote `#+END_SRCSee [[id:y][Y]].' here.
+  (sns-roam-test--with-unterminated-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n#+BEGIN_SRC sh\necho hi\n#+END_SRC"
+    ;; The block gains a blank line after it, so it counts as changed and
+    ;; is written in org's form; it must still be a source block.
+    (sns-roam-append-link "bare-id" "other-id" "Other" "See " ".")
+    (should (equal '((src-block "echo hi")
+                     (paragraph "See [[id:other-id][Other]]."))
+                   (mapcar (lambda (node)
+                             (list (org-ml-get-type node)
+                                   (if (org-ml-is-type 'src-block node)
+                                       (string-trim (org-ml-get-property :value node))
+                                     (org-ml-to-trimmed-string node))))
+                           (plist-get (sns-roam-body-elements "bare-id")
+                                      :elements))))))
+
+(ert-deftest sns-roam-set-body-after-an-unterminated-title ()
+  ;; The review of slice 14 wrote `#+title: XNew body.' here.
+  (sns-roam-test--with-unterminated-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: X"
+    (sns-roam-set-body "bare-id" "New body.")
+    (should (equal ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: X\nNew body.\n"
+                   (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-set-keyword-after-an-unterminated-paragraph ()
+  ;; The review of slice 14 wrote `Intro.#+filetags: :test:' here.
+  (sns-roam-test--with-unterminated-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: X\nIntro."
+    (sns-roam-set-keyword "bare-id" "FILETAGS" ":test:")
+    (let ((text (sns-roam-test--file-text file)))
+      (should (string-match-p "^Intro\\.$" text))
+      (should (string-match-p "^#\\+filetags: :test:$" text)))))
+
+(ert-deftest sns-roam-update-section-refuses-an-edit-that-reads-back-wrong ()
+  ;; An edit whose text would parse as something else is refused before
+  ;; the buffer changes.  The forced edit writes a paragraph with no line
+  ;; break before the next one, so the two would read back as one.
+  (sns-roam-test--with-unterminated-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: X\nOne.\n\nTwo.\n"
+    (let ((before (sns-roam-test--file-text file)))
+      (cl-letf (((symbol-function 'sns-roam--section-edits)
+                 (lambda (old-children _new-children)
+                   (let ((two (car (last old-children))))
+                     (list (list :begin (org-ml-get-property :begin two)
+                                 :end   (org-ml-get-property :begin two)
+                                 :text  "Merged "))))))
+        (let ((err (should-error
+                    (sns-roam-insert-element
+                     "bare-id"
+                     (lambda (node) (equal "One." (org-ml-to-trimmed-string node)))
+                     (org-ml-build-paragraph "New.")
+                     t))))
+          (should (string-match-p "would not read back as planned" (cadr err)))))
+      (should (equal before (sns-roam-test--file-text file)))
+      (should-not (buffer-modified-p (get-file-buffer file))))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

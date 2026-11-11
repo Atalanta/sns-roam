@@ -639,10 +639,12 @@ Loud failure on unknown ID or malformed file. Returns (:id :file)."
       (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
         (unless (and section (org-ml-is-type 'section section))
           (error "sns-roam: %s has no top-level section" file))
-        (sns-roam--apply-edits
-         (sns-roam--section-edits
-          (org-ml-get-children section)
-          (org-ml-get-children (funcall section-fn section)))))
+        (let* ((new-section (funcall section-fn section))
+               (edits       (sns-roam--section-edits
+                             (org-ml-get-children section)
+                             (org-ml-get-children new-section))))
+          (sns-roam--check-edits edits new-section file)
+          (sns-roam--apply-edits edits)))
       (save-buffer)
       (list :id id :file file))))
 
@@ -785,13 +787,52 @@ gave them.  Pure."
   "Make EDITS from `sns-roam--section-edits' in the current buffer, in order.
 Each edit replaces the text between its :begin and :end with its
 :text.  EDITS come last in the buffer first, so each one leaves the
-positions of those still to come as the parse gave them."
+positions of those still to come as the parse gave them.
+A file need not end with a newline, so an edit that writes after a
+last line without one starts a new line first; otherwise the new
+text would join that line and change what it parses as."
   (save-excursion
     (dolist (edit edits)
-      (let ((begin (plist-get edit :begin)))
+      (let ((begin (plist-get edit :begin))
+            (text  (plist-get edit :text)))
         (delete-region begin (plist-get edit :end))
         (goto-char begin)
-        (insert (plist-get edit :text))))))
+        (when (and (not (string-empty-p text))
+                   (> begin (point-min))
+                   (not (eq (char-before begin) ?\n)))
+          (insert "\n"))
+        (insert text)))))
+
+(defun sns-roam--child-signature (children)
+  "Return the type and trimmed printed text of each of CHILDREN.  Pure."
+  (mapcar (lambda (child)
+            (list (org-ml-get-type child)
+                  (org-ml-to-trimmed-string child)))
+          children))
+
+(defun sns-roam--check-edits (edits new-section file)
+  "Raise unless making EDITS gives the current buffer NEW-SECTION's children.
+Copies the buffer into a temporary one, makes EDITS there, and parses
+the result.  The first section's children must match NEW-SECTION's
+by type and trimmed text, or an `sns-roam:' error names FILE and the
+note's buffer is left as it was.  This catches any edit whose text
+would read back as something else, such as two elements merged by a
+missing line break."
+  (let* ((text     (save-restriction
+                     (widen)
+                     (buffer-substring-no-properties (point-min) (point-max))))
+         (reparsed (with-temp-buffer
+                     (insert text)
+                     (sns-roam--apply-edits edits)
+                     (delay-mode-hooks (org-mode))
+                     (let ((first (car (org-ml-get-children
+                                        (org-ml-parse-this-buffer)))))
+                       (when (org-ml-is-type 'section first)
+                         (org-ml-get-children first))))))
+    (unless (equal (sns-roam--child-signature (org-ml-get-children new-section))
+                   (sns-roam--child-signature reparsed))
+      (error "sns-roam: the edit to %s would not read back as planned, so nothing was written"
+             file))))
 #+end_src
 
 ** Discipline notes
@@ -802,6 +843,13 @@ positions of those still to come as the parse gave them."
   kept, and the buffer keeps =|a|b|=.
 - *AST-based.* No step edits the note as raw text. The edits replace
   whole parsed children with printed nodes.
+- *Checked before written.* =sns-roam--check-edits= makes the edits
+  on a copy and parses it first. Every primitive gets the check, so an
+  edit org would read back differently, for whatever reason, raises
+  instead of changing the note.
+- *A missing final newline.* A file may end without one. An edit
+  written after such a last line starts a new line, which is the
+  separator =org-ml-to-string= would print between the two elements.
 - *Narrowed buffers* are out of scope (issue #12).
 
 * Mutate: append a relationship link
