@@ -19,10 +19,11 @@ Each event adds a history line, so the owner adds one several times a week. Toda
 ## Out of scope
 
 - Inserting under a headline (issue #2), a diff in the return value (issue #10), and the full reference-note update flow (issue #9).
+- Inserting anything but a paragraph. History lines are paragraphs, and a list beside a list would merge. Org-ml rewriting untouched elements in org's canonical form, such as `|a|b|` as `| a | b |` (issue #14).
 
 ## Invariants
 
-- Every body element other than the new one keeps its text, and the edit maps over the full child list through `sns-roam--update-section`. A call that rewrote a neighbour would repeat the 2026-11-10 loss (issue #10, AGENTS.md rules on the write boundary and parsed child lists).
+- Every body element other than the new one keeps its content and stays a separate element, and the edit maps over the full child list through `sns-roam--update-section`. A call that rewrote a neighbour would repeat the 2026-11-10 loss (issue #10, AGENTS.md rules on the write boundary and parsed child lists).
 - A predicate that matches no element or more than one raises an `sns-roam:` error and the file is unchanged (AGENTS.md: failure is loud, no code path guesses).
 - `lisp/*.el` stays in step with `src/*.org` (AGENTS.md, `mise run check`).
 
@@ -45,10 +46,9 @@ Scenario: S12.3 An anchor that matches two paragraphs is refused
 
 ## Facts the builder needs
 
-- The new public function is `sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER` in `src/roam-api.org`, returning `(:id :file)` (issue #8). PRED sees only body elements, never the drawer or `#+` keywords (`sns-roam--section-header-p`, line 591).
-- `sns-roam-replace-element` (near line 850) counts matches with `org-ml-match` and edits through `sns-roam--update-section`. `sns-roam--map-children` (line 596) explains why the child list must be filtered and mapped whole, never sliced.
-- Spacing (`:post-blank`): at least one blank line separates the new element from each body element beside it, because org joins a paragraph to prose or a table that follows with no blank line. A gap that had more blank lines keeps them, as slice 10 keeps extra spacing, and none appears before the first headline. Two plain lists side by side still merge, because org ends a list only at two blank lines; this slice does not insert lists next to lists.
-- In `skills/roam-distill/SKILL.md`, the Write list gains the function, and step 2 of "The transform flow" names it for adding one element.
+- The new public function is `sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER` in `src/roam-api.org`, returning `(:id :file)` (issue #8). PRED sees only body elements, never the drawer or `#+` keywords (`sns-roam--section-header-p`, line 591). NEW-ELEMENT that is not a paragraph raises an `sns-roam:` error before anything is written.
+- `sns-roam-replace-element` (near line 850) counts matches with `org-ml-match` and edits through `sns-roam--update-section`. `sns-roam--map-children` (line 596) explains why the child list must be filtered and mapped whole, never sliced. In `skills/roam-distill/SKILL.md`, the Write list gains the function, and step 2 of "The transform flow" names it for adding one element.
+- Spacing (`:post-blank`): no gap shrinks, because org ends some elements, such as footnote definitions, only at two blank lines. The element before the new paragraph keeps its trailing blank lines, at least one. The new paragraph has one blank line after it when a body element follows, and otherwise the anchor's old trailing lines, so none appears before the first headline. Before writing, the edit parses the planned section text, for example with `sns-roam--parse-body-elements` (line 616), and checks that the body elements match the intended list by type and trimmed text. A mismatch raises an `sns-roam:` error and nothing is written.
 
 ## Questions to resolve
 
@@ -56,4 +56,4 @@ None.
 
 ## Done when
 
-The builder adds ert tests to `test/sns-roam-test.el` for S12.1, S12.2 and S12.3, and one for inserting before the first body element. S12.1 and S12.2 compare the file text from `:END:` to the end. S12.3 and a test whose predicate matches nothing compare the file's bytes before and after and show the `sns-roam:` error. A test inserts after a paragraph with two blank lines after it and shows one blank line before the new paragraph and two after it. Tests insert a paragraph after a table that prose follows with no blank line, and before that table, and show `sns-roam-body-elements` returning the table, the new paragraph and the prose as separate elements. The builder runs S12.3 through a file-and-load script, as the skill describes, and shows the error text it writes to the `.out` file. The owner reads the skill's diff and sees the Write list entry and the step 2 choice for adding one element. `mise run check` and `mise run test` pass.
+The builder adds ert tests to `test/sns-roam-test.el` for S12.1, S12.2 and S12.3, and one for inserting before the first body element. S12.1 and S12.2 compare the file text from `:END:` to the end. S12.3 and a test whose predicate matches nothing compare the file's bytes before and after and show the `sns-roam:` error. A test inserts after a paragraph with two blank lines after it and shows two blank lines before the new paragraph and one after it. A test inserts after a footnote definition that two blank lines and prose follow, and shows the three as separate elements. A test passes a plain list as NEW-ELEMENT, and a test makes the reparse check fail, for example by binding the spacing helper; both show the `sns-roam:` error and unchanged bytes. Tests insert a paragraph after a table that prose follows with no blank line, and before that table, and show `sns-roam-body-elements` returning the table, the new paragraph and the prose as separate elements. The builder runs S12.3 through a file-and-load script, as the skill describes, and shows the error text it writes to the `.out` file. The owner reads the skill's diff and sees the Write list entry and the step 2 choice for adding one element. `mise run check` and `mise run test` pass.
