@@ -51,4 +51,4 @@ None.
 
 ## Done when
 
-The builder runs S15.1 in a batch Emacs with a temporary `package-user-dir` and a `file://` URL to this branch, and shows the installed package list and the `require` result. It shows the S15.2 grep with no output, and `git diff main -- lisp/sns-roam-api.el` changing only the `Package-Requires` line. `mise run check` and `mise run test` pass.
+The builder runs S15.1 in a batch Emacs with a temporary `package-user-dir` and a `file://` URL to this branch, and shows the installed package list and the `require` result. It shows `git ls-files src lisp` listing only `src/roam-api.org` and `lisp/sns-roam-api.el`, the installed package's directory holding no `sns-roam-import` file, the S15.2 grep with no output, and `git diff main -- lisp/sns-roam-api.el` changing only the `Package-Requires` line. `mise run check` and `mise run test` pass.
