@@ -829,6 +829,157 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                              "2026-11-06: offered terms.\n")
                      (sns-roam-test--text-from-drawer-end file))))))
 
+;;; --- an edit writes only what it changed (slice 14) ---
+
+(defconst sns-roam-test--typed-note
+  (concat ":PROPERTIES:\n:ID: typed-id\n:KIND: fleeting\n:END:\n"
+          "#+title: Typed note\n\n"
+          "Intro.\n\n"
+          "|a|b|\n\n"
+          "+  item one\n\n"
+          "#+BEGIN_SRC sh\necho hi\n#+END_SRC\n\n"
+          "* Notes\n|c|d|\n")
+  "A note whose table, list and source block are not in org's printed form.
+Org prints them as `| a | b |', `- item one' and a lowercase
+`#+begin_src', so a write of any of them shows in the file.")
+
+(defconst sns-roam-test--typed-file-name "20261111090000-typed_note.org"
+  "File name of the typed note, in the roam form `sns-roam-rename' needs.")
+
+(defun sns-roam-test--changed-lines (before after)
+  "Return the lines a diff of BEFORE and AFTER shows, as (:removed R :added A).
+Lines the two texts share at the start, and then at the end of what
+is left, are dropped; R and A are the lines between."
+  (let ((old-lines (split-string before "\n"))
+        (new-lines (split-string after "\n")))
+    (while (and old-lines new-lines (equal (car old-lines) (car new-lines)))
+      (setq old-lines (cdr old-lines)
+            new-lines (cdr new-lines)))
+    (let ((old-reversed (reverse old-lines))
+          (new-reversed (reverse new-lines)))
+      (while (and old-reversed new-reversed
+                  (equal (car old-reversed) (car new-reversed)))
+        (setq old-reversed (cdr old-reversed)
+              new-reversed (cdr new-reversed)))
+      (list :removed (reverse old-reversed)
+            :added (reverse new-reversed)))))
+
+(defmacro sns-roam-test--with-typed-note (&rest body)
+  "Run BODY with `file' and `before' bound for a registered typed note.
+The note is `sns-roam-test--typed-note' with ID \"typed-id\", and
+`before' is its text.  A second note, \"other-id\", is there to link
+to.  Kills every note buffer afterwards, under its old or new name."
+  (declare (indent 0))
+  `(sns-roam-test--with-roam-dir
+     (let ((file (expand-file-name sns-roam-test--typed-file-name
+                                   org-roam-directory)))
+       (sns-roam-test--register file sns-roam-test--typed-note)
+       (sns-roam-test--register
+        (expand-file-name "other.org" org-roam-directory)
+        ":PROPERTIES:\n:ID: other-id\n:END:\n#+title: Other\n")
+       (let ((before (sns-roam-test--file-text file)))
+         (unwind-protect (progn ,@body)
+           (mapc #'sns-roam-test--kill-file-buffer
+                 (directory-files org-roam-directory t "\\.org\\'")))))))
+
+(ert-deftest sns-roam-replace-element-leaves-a-typed-table-and-list-alone ()
+  ;; S14.1.  On 2026-11-11 this edit also rewrote `|a|b|' as `| a | b |'
+  ;; and `+  item one' as `- item one' (issue #14).
+  (sns-roam-test--with-typed-note
+    (sns-roam-replace-element
+     "typed-id"
+     (lambda (node) (equal "Intro." (org-ml-to-trimmed-string node)))
+     (org-ml-build-paragraph :post-blank 1 "New intro."))
+    (should (equal '(:removed ("Intro.") :added ("New intro."))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-append-link-leaves-the-rest-alone ()
+  ;; S14.2.  The list's blank line already ends it, so the new paragraph
+  ;; is the only line added, straight before `* Notes'.
+  (sns-roam-test--with-typed-note
+    (sns-roam-append-link "typed-id" "other-id" "Other" "See " ".")
+    (should (equal '(:removed () :added ("See [[id:other-id][Other]]."))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-rename-changes-only-the-title-line ()
+  ;; S14.3.  The owner's Emacs runs the autosync mode, which records the
+  ;; new title on save; the slug of the new name is made from it.
+  (sns-roam-test--with-typed-note
+    (org-roam-db-autosync-mode 1)
+    (unwind-protect
+        (let ((renamed (plist-get (sns-roam-rename "typed-id" "Renamed note")
+                                  :file)))
+          (should (equal "20261111090000-renamed_note.org"
+                         (file-name-nondirectory renamed)))
+          (should-not (file-exists-p file))
+          (should (equal '(:removed ("#+title: Typed note")
+                           :added ("#+title: Renamed note"))
+                         (sns-roam-test--changed-lines
+                          before (sns-roam-test--file-text renamed)))))
+      (org-roam-db-autosync-mode -1))))
+
+(ert-deftest sns-roam-set-body-leaves-the-header-and-headings-alone ()
+  ;; `set-body' replaces every body element, so those lines go; the
+  ;; drawer, the title and the typed table under `* Notes' stay.
+  (sns-roam-test--with-typed-note
+    (sns-roam-set-body "typed-id" "New intro.\n\n")
+    (should (equal '(:removed ("Intro." "" "|a|b|" "" "+  item one" ""
+                               "#+BEGIN_SRC sh" "echo hi" "#+END_SRC")
+                     :added ("New intro."))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-insert-element-leaves-typed-elements-alone ()
+  (sns-roam-test--with-typed-note
+    (sns-roam-insert-element "typed-id"
+                             (sns-roam-test--containing "Intro.")
+                             (org-ml-build-paragraph "Added.")
+                             t)
+    (should (equal '(:removed () :added ("Added." ""))
+                   (sns-roam-test--changed-lines
+                    before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-set-property-writes-only-the-drawer ()
+  ;; The drawer is the element the edit changes, so org may print it in
+  ;; its own form; every line after it keeps its text.
+  (sns-roam-test--with-typed-note
+    (should (eq t (sns-roam-set-property "typed-id" "KIND" "permanent")))
+    (let ((after (sns-roam-test--file-text file)))
+      (should (string-match-p "^:KIND: +permanent$" after))
+      (should (string-match-p "^:ID: +typed-id$" after))
+      (should (equal (substring before (string-match "^:END:$" before))
+                     (substring after (string-match "^:END:$" after)))))))
+
+(ert-deftest sns-roam-set-property-with-the-same-value-writes-nothing ()
+  ;; Setting a property to the value it has leaves every byte alone.
+  (sns-roam-test--with-typed-note
+    (sns-roam-set-property "typed-id" "KIND" "fleeting")
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-section-edits-keep-unchanged-children-unwritten ()
+  ;; The calculation needs no file: replacing one paragraph through a
+  ;; transform, which copies the other children, gives one edit over
+  ;; that paragraph's own bounds.
+  (with-temp-buffer
+    (insert sns-roam-test--typed-note)
+    (let* ((section (car (org-ml-get-children (org-ml-parse-this-buffer))))
+           (intro-p (lambda (node)
+                      (equal "Intro." (org-ml-to-trimmed-string node))))
+           (intro (seq-find intro-p (org-ml-get-children section)))
+           (new-section (org-ml-match-map
+                         `((:pred ,intro-p))
+                         (lambda (_old)
+                           (org-ml-build-paragraph :post-blank 1 "New intro."))
+                         section)))
+      (should (equal (list (list :begin (org-ml-get-property :begin intro)
+                                 :end (org-ml-get-property :end intro)
+                                 :text "New intro.\n\n"))
+                     (sns-roam--section-edits
+                      (org-ml-get-children section)
+                      (org-ml-get-children new-section)))))))
+
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
   ;; owner's database is never the value, setup included.

@@ -272,39 +272,38 @@ node-property as the drawer's last child. Pure — does not mutate."
        (append updated (list (org-ml-build-node-property key value))))
      drawer)))
 
+(defun sns-roam--set-property-in-section (section key value)
+  "Return SECTION with KEY set to VALUE in its property drawer.
+Maps over the full child list and replaces only the drawer.  Raises
+an `sns-roam:' error when SECTION has no property drawer.  Pure."
+  (let ((drawer (cl-find-if (lambda (child)
+                              (org-ml-is-type 'property-drawer child))
+                            (org-ml-get-children section))))
+    (unless drawer
+      (error "sns-roam: no top-level property-drawer to set %s in" key))
+    (sns-roam--map-children
+     (lambda (children)
+       (mapcar (lambda (child)
+                 (if (eq child drawer)
+                     (sns-roam--upsert-node-property drawer key value)
+                   child))
+               children))
+     section)))
+
 (defun sns-roam-set-property (id key value)
   "Set property KEY to VALUE in the top-level drawer of roam node ID.
 
 ID is a roam UUID; KEY is the bare property name (no colons);
 VALUE is a string. Returns t on success. Errors if the node is
 unknown, or if the file has no top-level section/drawer to
-update (which would mean it isn't a well-formed roam file)."
-  (let ((file (sns-roam--node-file-or-error id)))
-    (with-current-buffer (find-file-noselect file)
-      (let* ((tree     (org-ml-parse-this-buffer))
-             (section  (car (org-ml-get-children tree))))
-        (unless (and section (org-ml-is-type 'section section))
-          (error "sns-roam: %s has no top-level section" file))
-        (let* ((sec-children (org-ml-get-children section))
-               (drawer       (cl-find-if
-                              (lambda (c) (org-ml-is-type 'property-drawer c))
-                              sec-children)))
-          (unless drawer
-            (error "sns-roam: %s has no top-level property-drawer" file))
-          (let* ((new-drawer   (sns-roam--upsert-node-property drawer key value))
-                 (new-section  (org-ml-set-children
-                                (mapcar (lambda (c)
-                                          (if (eq c drawer) new-drawer c))
-                                        sec-children)
-                                section))
-                 (new-tree     (org-ml-set-children
-                                (cons new-section
-                                      (cdr (org-ml-get-children tree)))
-                                tree)))
-            (erase-buffer)
-            (insert (org-ml-to-string new-tree))
-            (save-buffer)
-            t))))))
+update (which would mean it isn't a well-formed roam file).
+Composes through `sns-roam--update-section', so only the drawer is
+written and every other element keeps its text."
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (sns-roam--set-property-in-section section key value)))
+  t)
 
 (defun sns-roam--section-header-p (element)
   "Non-nil if ELEMENT is roam header furniture (property-drawer or keyword)."
@@ -317,13 +316,13 @@ FN takes the section's children (header furniture + body) and
 returns a new child list. Pure: returns a new section, mutates
 nothing.
 
-IMPORTANT: operate on the child list as a whole — do NOT slice it
+IMPORTANT: operate on the child list as a whole. Do NOT slice it
 into header/body sublists and re-`append` them. Parsed nodes carry
 buffer positions and :parent backrefs; reassembling sliced sublists
-of parsed nodes corrupts those, and `org-ml-update-this-buffer`'s
-reconciliation then fails with `number-or-marker-p`. Filtering the
-list in place (e.g. `seq-filter`) is safe; slicing-and-rejoining is
-not.
+of parsed nodes corrupts those, and the write in
+`sns-roam--update-section' finds unchanged children by those
+positions. Filtering the list in place (e.g. `seq-filter`) is safe;
+slicing-and-rejoining is not.
 
 Body helpers are expressed in terms of this:
 - append: `(append children NEW)` — header stays in front untouched.
@@ -345,20 +344,22 @@ that section's children. Empty STRING yields nil."
 
 (defun sns-roam--update-section (id section-fn)
   "Apply pure SECTION-FN (section -> section) to node ID and save.
-The single write boundary for body mutations: parse → transform →
-reconcile buffer (`org-ml-update-this-buffer`, minimal-diff) → save.
+The single write boundary for every mutation of the note's first
+section.  It parses the buffer, applies SECTION-FN, and writes only
+the children whose text changed, as `sns-roam--section-edits'
+decides.  Every child SECTION-FN left alone, and every headline after
+the section, keeps the text the owner typed.  SECTION-FN raises
+before anything is written, so a refusal leaves the buffer as it was.
 Loud failure on unknown ID or malformed file. Returns (:id :file)."
   (let ((file (sns-roam--node-file-or-error id)))
     (with-current-buffer (find-file-noselect file)
-      (org-ml-update-this-buffer
-       (lambda (data)
-         (let* ((children (org-ml-get-children data))
-                (section  (car children)))
-           (unless (and section (org-ml-is-type 'section section))
-             (error "sns-roam: %s has no top-level section" file))
-           (org-ml-set-children
-            (cons (funcall section-fn section) (cdr children))
-            data))))
+      (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
+        (unless (and section (org-ml-is-type 'section section))
+          (error "sns-roam: %s has no top-level section" file))
+        (sns-roam--apply-edits
+         (sns-roam--section-edits
+          (org-ml-get-children section)
+          (org-ml-get-children (funcall section-fn section)))))
       (save-buffer)
       (list :id id :file file))))
 
@@ -380,6 +381,76 @@ Returns (:id :file). Errors loudly on unknown ID or malformed file."
         (append (seq-filter #'sns-roam--section-header-p children)
                 (sns-roam--parse-body-elements new-body)))
       section))))
+
+(defun sns-roam--kept-index (old-children start child)
+  "Return the index in OLD-CHILDREN of the child CHILD leaves unchanged, or nil.
+The match is at index START or later, has CHILD's :begin position,
+and prints to the same `org-ml-to-string' text.  A built node has no
+:begin, so it never matches.  Pure."
+  (when-let* ((begin (org-ml-get-property :begin child)))
+    (cl-position-if (lambda (old-child)
+                      (and (eql begin (org-ml-get-property :begin old-child))
+                           (string= (org-ml-to-string old-child)
+                                    (org-ml-to-string child))))
+                    old-children
+                    :start start)))
+
+(defun sns-roam--run-edit (old-children from to new-nodes)
+  "Return the edit that replaces OLD-CHILDREN from index FROM up to TO with NEW-NODES.
+The edit is (:begin B :end E :text TEXT), where TEXT is the
+`org-ml-to-string' text of NEW-NODES.  B is where the child at FROM
+begins, or where the last child ends when FROM is past the end.  E is
+where the child before TO ends, or B when the run removes no child.
+A section's children follow each other with no text between them, so
+these bounds cover exactly the removed children.  Returns nil when
+the run removes nothing and adds nothing.  Pure."
+  (when (or (< from to) new-nodes)
+    (let ((begin (if (< from (length old-children))
+                     (org-ml-get-property :begin (nth from old-children))
+                   (org-ml-get-property :end (car (last old-children))))))
+      (list :begin begin
+            :end   (if (< from to)
+                       (org-ml-get-property :end (nth (1- to) old-children))
+                     begin)
+            :text  (mapconcat #'org-ml-to-string new-nodes "")))))
+
+(defun sns-roam--section-edits (old-children new-children)
+  "Return the edits that turn the text of OLD-CHILDREN into NEW-CHILDREN.
+OLD-CHILDREN are a section's parsed children; NEW-CHILDREN are the
+children a transform returned for it.  Each new child that
+`sns-roam--kept-index' finds unchanged keeps its typed text.  Each run
+of other children between two kept ones becomes one edit from
+`sns-roam--run-edit'.  The edits come last in the buffer first, so
+making them in order leaves the positions of the rest as the parse
+gave them.  Pure."
+  (let ((from 0)
+        (pending-new-nodes nil)
+        (edits nil))
+    (dolist (child new-children)
+      (if-let* ((kept (sns-roam--kept-index old-children from child)))
+          (progn
+            (push (sns-roam--run-edit old-children from kept
+                                      (reverse pending-new-nodes))
+                  edits)
+            (setq from (1+ kept)
+                  pending-new-nodes nil))
+        (push child pending-new-nodes)))
+    (push (sns-roam--run-edit old-children from (length old-children)
+                              (reverse pending-new-nodes))
+          edits)
+    (delq nil edits)))
+
+(defun sns-roam--apply-edits (edits)
+  "Make EDITS from `sns-roam--section-edits' in the current buffer, in order.
+Each edit replaces the text between its :begin and :end with its
+:text.  EDITS come last in the buffer first, so each one leaves the
+positions of those still to come as the parse gave them."
+  (save-excursion
+    (dolist (edit edits)
+      (let ((begin (plist-get edit :begin)))
+        (delete-region begin (plist-get edit :end))
+        (goto-char begin)
+        (insert (plist-get edit :text))))))
 
 (defun sns-roam-append-link (from-id to-id label before after)
   "Append a relationship paragraph to FROM-ID linking to TO-ID.
@@ -648,21 +719,11 @@ Replaces existing keyword in place; appends if absent."
 KEY is the bare uppercase keyword name (e.g. \"TITLE\"); VALUE
 is a string. Returns t on success. Errors loudly on unknown ID
 or missing top-level section."
-  (let ((file (sns-roam--node-file-or-error id)))
-    (with-current-buffer (find-file-noselect file)
-      (let* ((tree    (org-ml-parse-this-buffer))
-             (section (car (org-ml-get-children tree))))
-        (unless (and section (org-ml-is-type 'section section))
-          (error "sns-roam: %s has no top-level section" file))
-        (let* ((new-section (sns-roam--upsert-keyword section key value))
-               (new-tree    (org-ml-set-children
-                             (cons new-section
-                                   (cdr (org-ml-get-children tree)))
-                             tree)))
-          (erase-buffer)
-          (insert (org-ml-to-string new-tree))
-          (save-buffer)
-          t)))))
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (sns-roam--upsert-keyword section key value)))
+  t)
 
 (defun sns-roam--split-roam-filename (path)
   "Return (PREFIX . SLUG) from a roam filename PATH.
