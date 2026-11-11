@@ -159,7 +159,10 @@ note file, and never place the line yourself or rewrite the body with
                                 (mapcar #'org-ml-to-trimmed-string
                                         (plist-get (sns-roam-body-elements id)
                                                    :elements))))
-                (sns-roam-error (list :id id :error (cdr err)))))
+                (sns-roam-error (list :id id :error (cdr err)))
+                (error (list :id id :error
+                             (list :kind 'other :condition (car err)
+                                   :data (cdr err))))))
             ids)))
      (with-temp-file "/tmp/history-anchor.out"
        (prin1 places (current-buffer))))
@@ -170,7 +173,9 @@ note file, and never place the line yourself or rewrite the body with
    naming each note, and stop. Offer nothing to apply, not even for the
    notes that passed. Each `:error` is a plist that starts with `:kind`.
    Report the `:kind` and the facts it carries, such as `:count` for
-   `sns-roam-match-count`, and read nothing from a message. A note in
+   `sns-roam-match-count`, and read nothing from a message. `:kind other`
+   is a failure from Emacs or org-roam, not sns-roam; report its
+   `:condition` and `:data` as they are. A note in
    another layout (`sns-roam-history-layout`, or
    `sns-roam-unsupported-element` for a `* History` heading) is for the
    owner to edit by hand.
@@ -195,7 +200,10 @@ note file, and never place the line yourself or rewrite the body with
                      (org-ml-build-paragraph (plist-get place :line))
                      (plist-get place :after))
                   (sns-roam-error (list :id (plist-get place :id)
-                                        :error (cdr err))))))
+                                        :error (cdr err)))
+                  (error (list :id (plist-get place :id)
+                               :error (list :kind 'other :condition (car err)
+                                            :data (cdr err)))))))
             places)))
      (with-temp-file "/tmp/history-apply.out"
        (prin1 results (current-buffer))))
@@ -335,9 +343,11 @@ One stage at a time. Show before write.
 
 6. **APPLY.** Build each body as org-ml AST against the pre-minted IDs;
    `create-node` each with KIND `"permanent"` and its pre-minted ID. Wrap
-   each in `condition-case` on `sns-roam-error`; collect `(:ok FILE)` /
-   `(:error TITLE DATA)`, where DATA is `(cdr err)`, the plist that
-   starts with `:kind`.
+   each in `condition-case` with a `sns-roam-error` handler and then an
+   `error` handler, so one failing note never stops the batch's report;
+   collect `(:ok FILE)` / `(:error TITLE DATA)`, where DATA is `(cdr err)`
+   for an sns-roam failure, or `(:kind other :condition C :data D)` for any
+   other.
 
 7. **SYNC + VERIFY.** Run `(org-roam-db-sync)` so the new files are graph-live
    (links/backlinks won't resolve until synced). Then verify:
