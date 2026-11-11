@@ -7,6 +7,18 @@
 (require 'ert)
 (require 'cl-lib)
 
+;; `org-roam-db-location' defaults to the owner's database.  Setting it
+;; before org-roam loads means its `defcustom' keeps this value, so the
+;; default is never the value at any point in the run.
+(defconst sns-roam-test--db-location
+  (make-temp-file "sns-roam-test-db" nil ".db")
+  "Temporary database file every test in this run uses.")
+(setq org-roam-db-location sns-roam-test--db-location)
+(add-hook 'kill-emacs-hook
+          (lambda ()
+            (when (file-exists-p sns-roam-test--db-location)
+              (delete-file sns-roam-test--db-location))))
+
 (setq package-user-dir (expand-file-name "~/.emacs.d/elpa"))
 (unless (file-directory-p package-user-dir)
   (error "sns-roam tests: no packages at %s" package-user-dir))
@@ -27,12 +39,39 @@
 
 (defmacro sns-roam-test--with-roam-dir (&rest body)
   "Run BODY with `org-roam-directory' set to a fresh temporary directory.
-Deletes the directory afterwards, so no test touches the owner's slipbox."
+Closes the database connection and deletes the directory afterwards,
+so no test touches the owner's slipbox or its database."
   (declare (indent 0))
   `(let* ((dir (make-temp-file "sns-roam-test" t))
           (org-roam-directory dir))
      (unwind-protect (progn ,@body)
+       (org-roam-db--close)
        (delete-directory dir t))))
+
+(defun sns-roam-test--kill-file-buffer (file)
+  "Kill the buffer visiting FILE, if there is one."
+  (let ((buffer (get-file-buffer file)))
+    (when buffer
+      (kill-buffer buffer))))
+
+(defun sns-roam-test--file-text (file)
+  "Return the contents of FILE as a string."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(defun sns-roam-test--register (file text)
+  "Write TEXT to FILE and index it in the org-roam database."
+  (with-temp-file file
+    (insert text))
+  (org-roam-db-update-file file))
+
+(defun sns-roam-test--all-rows ()
+  "Return an alist of each database table name and all its rows."
+  (mapcar (lambda (schema)
+            (let ((table (car schema)))
+              (cons table (org-roam-db-query [:select * :from $i1] table))))
+          org-roam-db--table-schemata))
 
 (defun sns-roam-test--org-files ()
   "Return the names of the .org files in `org-roam-directory'."
@@ -126,6 +165,80 @@ Deletes the directory afterwards, so no test touches the owner's slipbox."
     (with-temp-buffer
       (insert-file-contents file)
       (should-not (re-search-forward ":ensure" nil t)))))
+
+;;; --- sns-roam-create-node registers the node (slice 9) ---
+
+(ert-deftest sns-roam-create-node-new-note-can-be-edited-at-once ()
+  ;; S9.1.  A batch on 2026-11-09 failed seven times calling
+  ;; `sns-roam-set-body' straight after `sns-roam-create-node' (issue #6).
+  (sns-roam-test--with-roam-dir
+    (should-not (org-roam-db-query [:select id :from nodes :where (= title $s1)]
+                                   "Batch claim"))
+    (let* ((created (sns-roam-create-node "Batch claim" "permanent"))
+           (file (plist-get created :file)))
+      (unwind-protect
+          (let ((result (sns-roam-set-body (plist-get created :id)
+                                           "The new body.")))
+            (should (equal file (plist-get result :file)))
+            (let ((text (sns-roam-test--file-text file)))
+              (should (string-match-p "^#\\+title: Batch claim$" text))
+              (should (string-match-p "^The new body\\.$" text))))
+        (sns-roam-test--kill-file-buffer file)))))
+
+(ert-deftest sns-roam-create-node-links-show-as-backlinks-at-once ()
+  ;; S9.2
+  (sns-roam-test--with-roam-dir
+    (sns-roam-test--register
+     (expand-file-name "hub.org" org-roam-directory)
+     ":PROPERTIES:\n:ID: hub-id\n:END:\n#+title: Hub\n")
+    (let* ((body (sns-roam--parse-body-elements
+                  "Spoke builds on [[id:hub-id][Hub]]."))
+           (spoke (sns-roam-create-node "Spoke" "permanent" body))
+           (edges (plist-get (sns-roam-expand "hub-id") :edges)))
+      (should (cl-some (lambda (edge)
+                         (and (eq :backward (plist-get edge :direction))
+                              (equal (plist-get spoke :id)
+                                     (plist-get edge :source-id))))
+                       edges)))))
+
+(ert-deftest sns-roam-create-node-refusal-leaves-file-and-rows-alone ()
+  ;; A row for a file that was not written would make a later lookup of
+  ;; the ID resolve to the wrong note.
+  (sns-roam-test--with-roam-dir
+    (let* ((time (date-to-time "2026-01-01 09:00:00"))
+           (path (expand-file-name
+                  (concat (sns-roam--filename-prefix-of time)
+                          "-overwrite_target.org")
+                  org-roam-directory))
+           (read-bytes (lambda ()
+                         (with-temp-buffer
+                           (insert-file-contents-literally path)
+                           (buffer-string)))))
+      (sns-roam-test--register
+       path ":PROPERTIES:\n:ID: existing-id\n:END:\n#+title: Existing note\n")
+      (let ((bytes-before (funcall read-bytes))
+            (rows-before (sns-roam-test--all-rows)))
+        (let ((err (should-error (sns-roam-create-node "Overwrite target"
+                                                       "permanent" nil
+                                                       "new-id" nil time)
+                                 :type 'error)))
+          (should (equal (format "sns-roam: refusing to overwrite existing file %s"
+                                 path)
+                         (cadr err))))
+        (should (equal bytes-before (funcall read-bytes)))
+        (should (equal rows-before (sns-roam-test--all-rows)))
+        (should-not (org-roam-db-query [:select id :from nodes :where (= id $s1)]
+                                       "new-id"))))))
+
+(ert-deftest sns-roam-tests-use-a-temporary-database ()
+  ;; The test file sets the location before it loads org-roam, so the
+  ;; owner's database is never the value, setup included.
+  (should (equal sns-roam-test--db-location org-roam-db-location))
+  (should (string-prefix-p (file-truename temporary-file-directory)
+                           (file-truename org-roam-db-location)))
+  (should-not (equal (file-truename org-roam-db-location)
+                     (file-truename
+                      (eval (car (get 'org-roam-db-location 'standard-value)))))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

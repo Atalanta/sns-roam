@@ -1029,10 +1029,17 @@ of the bridge primitives.
 - *Output*: plist =(:id ID :title TITLE :file PATH)=.
 - *Side effects*:
   - New file written under =org-roam-directory= via
-    =write-region= over a =with-temp-buffer=. The file is never
-    visited as a buffer; org-roam's autosync hook is bypassed,
-    and the new node will be picked up on org-roam's next index
-    refresh.
+    =write-region= over a =with-temp-buffer=, so org-roam's
+    autosync hook never sees it.
+  - The new file is then indexed with =org-roam-db-update-file=,
+    which records its node and its links in the database. Every
+    edit primitive resolves an ID through the database, so a batch
+    can edit, link and expand the new node straight away, with no
+    =org-roam-db-sync= first (issue #6). The links the body holds
+    show as backlinks on their targets at once.
+  - When the destination already exists, the function errors
+    before it writes or indexes anything, so the existing file and
+    its rows stay as they were and no row names the new ID.
 - *Discipline*:
   - Errors loudly if the destination file already exists. Do not
     overwrite — collisions almost certainly mean a bug.
@@ -1094,7 +1101,10 @@ same time value. SLUG-SOURCE, if non-nil, is slugified for the
 filename in place of TITLE — use it to decouple the filename slug
 from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
-Returns (:id :title :file). Errors if the destination already exists."
+Indexes the new file in the org-roam database, so the edit
+primitives can resolve the returned ID at once.
+Returns (:id :title :file). Errors if the destination already
+exists, before writing or indexing anything."
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
@@ -1123,6 +1133,9 @@ Returns (:id :title :file). Errors if the destination already exists."
     (with-temp-buffer
       (insert content)
       (write-region (point-min) (point-max) path nil 'silent))
+    ;; The edit primitives look IDs up in the database, so a node
+    ;; that is only on disk is unknown to them until it is indexed.
+    (org-roam-db-update-file path)
     (list :id id :title title :file path)))
 #+end_src
 

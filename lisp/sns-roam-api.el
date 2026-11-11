@@ -552,7 +552,10 @@ same time value. SLUG-SOURCE, if non-nil, is slugified for the
 filename in place of TITLE — use it to decouple the filename slug
 from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
-Returns (:id :title :file). Errors if the destination already exists."
+Indexes the new file in the org-roam database, so the edit
+primitives can resolve the returned ID at once.
+Returns (:id :title :file). Errors if the destination already
+exists, before writing or indexing anything."
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
@@ -581,6 +584,9 @@ Returns (:id :title :file). Errors if the destination already exists."
     (with-temp-buffer
       (insert content)
       (write-region (point-min) (point-max) path nil 'silent))
+    ;; The edit primitives look IDs up in the database, so a node
+    ;; that is only on disk is unknown to them until it is indexed.
+    (org-roam-db-update-file path)
     (list :id id :title title :file path)))
 
 (defun sns-roam--meeting-title (series time)
