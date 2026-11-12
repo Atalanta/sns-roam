@@ -51,14 +51,20 @@ echo. Stdout will corrupt on `&`, embedded quotes, multi-line strings,
 and similar. Instead:
 
 <file_and_load>
-1. Write the elisp script to `/tmp/<task>.el`. The script computes
-   results and writes them to `/tmp/<task>.out` via:
+Before the first script of a session, make a directory for it with
+`mktemp -d /tmp/roam-session.XXXXXX`, and write every script and
+result of the session there. Below, SESSION stands for that directory.
+Other sessions leave their scripts in `/tmp`, and two sessions at once
+would otherwise overwrite each other's files.
+
+1. Write the elisp script to `SESSION/<task>.el`. The script computes
+   results and writes them to `SESSION/<task>.out` via:
    ```elisp
-   (with-temp-file "/tmp/<task>.out"
+   (with-temp-file "SESSION/<task>.out"
      (let ((print-length nil) (print-level nil))
        (prin1 RESULT (current-buffer))))
    ```
-2. Load it: `emacsclient -e '(load-file "/tmp/<task>.el")'`
+2. Load it: `emacsclient -e '(load-file "SESSION/<task>.el")'`
 3. `Read` the `.out` file from Claude.
 
 Two files: input script, output buffer. Never escape on both ends.
@@ -205,7 +211,7 @@ Stages 1+2 are seeds; stage 3 expands; stage 4 mines text; stage 5 is
 your synthesis. Don't loop within a stage.
 
 **A single call per stage** means: one elisp script that runs the
-stage's call(s) in batch, writes the result to `/tmp/<task>.out`, and
+stage's call(s) in batch, writes the result to `SESSION/<task>.out`, and
 returns. If you find yourself running `find-by-metadata` three times
 with different queries to "verify," stop. That's a synthesis
 problem, not a pipeline problem.
@@ -271,8 +277,8 @@ should be your synthesis in your own words.
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
-;; /tmp/roam-fetch-seed.el
-(with-temp-file "/tmp/roam-fetch-seed.out"
+;; SESSION/roam-fetch-seed.el
+(with-temp-file "SESSION/roam-fetch-seed.out"
   (let ((print-length nil) (print-level nil))
     (prin1 (sns-roam-find-by-metadata "atomic")
            (current-buffer))))
@@ -286,9 +292,9 @@ metadata returned hits.
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
-;; /tmp/roam-fetch-expand.el
+;; SESSION/roam-fetch-expand.el
 (let ((seeds '("9F66EA2C-..." "1ED2CABC-...")))
-  (with-temp-file "/tmp/roam-fetch-expand.out"
+  (with-temp-file "SESSION/roam-fetch-expand.out"
     (let ((print-length nil) (print-level nil))
       (prin1 (mapcar (lambda (id) (cons id (sns-roam-expand id))) seeds)
              (current-buffer)))))
@@ -302,9 +308,9 @@ cites `Observability` (forward edge into the use-case).
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
-;; /tmp/roam-fetch-mine.el
+;; SESSION/roam-fetch-mine.el
 (let ((targets '(("1ED2CABC-..." . 269) ("9F66EA2C-..." . 591))))
-  (with-temp-file "/tmp/roam-fetch-mine.out"
+  (with-temp-file "SESSION/roam-fetch-mine.out"
     (let ((print-length nil) (print-level nil))
       (prin1 (mapcar (lambda (p)
                        (condition-case nil

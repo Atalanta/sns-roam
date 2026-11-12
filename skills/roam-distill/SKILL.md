@@ -42,10 +42,16 @@ note, densely linked.
 ## Operating Mode: file-and-load idiom
 
 All non-trivial elisp goes via file-and-load, never bare `emacsclient -e`.
+Before the first script of a session, make a directory for it with
+`mktemp -d /tmp/roam-session.XXXXXX`, and write every script and
+result of the session there. Below, SESSION stands for that directory.
+Other sessions leave their scripts in `/tmp`, and two sessions at once
+would otherwise overwrite each other's files.
+
 Roam content carries `[[wikilinks]]`, em-dashes, and `&` that corrupt on
-the `-e` wire. Write the script to `/tmp/<task>.el`, have it `prin1` its
-result into `/tmp/<task>.out` with `with-temp-file`, load it with
-`emacsclient -e '(load-file "/tmp/<task>.el")' >/dev/null`, then `cat` the
+the `-e` wire. Write the script to `SESSION/<task>.el`, have it `prin1` its
+result into `SESSION/<task>.out` with `with-temp-file`, load it with
+`emacsclient -e '(load-file "SESSION/<task>.el")' >/dev/null`, then `cat` the
 `.out`. The `load-file` return value is swallowed. Capture to a file, do
 not rely on stdout.
 Every script starts with the line `;;; -*- lexical-binding: t; -*-`.
@@ -153,7 +159,7 @@ note file, and never place the line yourself or rewrite the body with
                              (list :kind 'other :condition (car err)
                                    :data (cdr err))))))
             ids)))
-     (with-temp-file "/tmp/history-anchor.out"
+     (with-temp-file "SESSION/history-anchor.out"
        (prin1 places (current-buffer))))
    ```
 
@@ -194,7 +200,7 @@ note file, and never place the line yourself or rewrite the body with
                                :error (list :kind 'other :condition (car err)
                                             :data (cdr err)))))))
             places)))
-     (with-temp-file "/tmp/history-apply.out"
+     (with-temp-file "SESSION/history-apply.out"
        (prin1 results (current-buffer))))
    ```
 
