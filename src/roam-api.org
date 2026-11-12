@@ -12,7 +12,7 @@ The bridge uses two libraries:
   =org-roam-backlinks-get=) for graph metadata and traversal.
 - *org-ml* for body content, excerpts and every edit to a note.
 
-Every public function takes and returns plists. Every edit to a
+Every public function takes positional arguments (IDs, strings, predicates, org-ml nodes) and returns a plist, or a list of plists. Every edit to a
 note's first section goes through one write boundary,
 =sns-roam--update-section=. Every failure the bridge detects raises a
 condition under =sns-roam-error=, except the empty series name in

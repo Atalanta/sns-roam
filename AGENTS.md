@@ -17,7 +17,7 @@ An Emacs Lisp bridge between Claude and an org-roam slipbox. It has read primiti
 
 - Edit `src/*.org`. Never edit `lisp/*.el`, which is generated. In June 2026 `sns-roam-meeting-note` was added to the tangled file by hand, and the org source lacked it until it was restored when this repository was created.
 - Public names start with `sns-roam-` and private ones with `sns-roam--`.
-- Functions take and return plists. Edits to a note's body go through the single write boundary, `sns-roam--update-section`.
+- Public functions take positional arguments and return plists, or lists of plists. Edits to a note's body go through the single write boundary, `sns-roam--update-section`.
 - Failure is loud. An unknown ID or a match that isn't unique raises an error with the `sns-roam:` prefix, and no code path guesses.
 - When you change the body of a parsed org-ml section, map over the full child list and filter it. Don't slice it into sublists and join them again, because that corrupts the buffer positions org-ml reconciles against.
 
