@@ -319,6 +319,9 @@ Empty list if no hits or file isn't a roam node."
         (hits nil))
     (with-temp-buffer
       (insert-file-contents file)
+      ;; `org-id-get' reads the drawer through `org-element-at-point',
+      ;; which warns in any buffer not in org-mode.
+      (delay-mode-hooks (org-mode))
       (let ((id (org-with-point-at 1 (org-id-get))))
         (when id
           (let* ((node (org-roam-node-from-id id))
@@ -835,6 +838,9 @@ that section's children. Empty STRING yields nil."
       nil
     (let* ((tree    (with-temp-buffer
                       (insert string)
+                      ;; Org's parser expects an org-mode buffer, and
+                      ;; parts of it warn in any other.
+                      (delay-mode-hooks (org-mode))
                       (org-ml-parse-this-buffer)))
            (section (car (org-ml-get-children tree))))
       (if section (org-ml-get-children section) nil))))

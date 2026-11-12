@@ -66,6 +66,7 @@ and similar. Instead:
 3. `Read` the `.out` file from Claude.
 
 Two files: input script, output buffer. Never escape on both ends.
+Every script starts with the line `;;; -*- lexical-binding: t; -*-`.
 This is the canonical idiom for any non-trivial elisp work in this
 emacs.
 </file_and_load>
@@ -206,6 +207,7 @@ hit so excerpt-mining works.
 **Expanding multiple seeds in one call:** the canonical shape is
 
 ```elisp
+;;; -*- lexical-binding: t; -*-
 (let ((seeds '(ID1 ID2 ID3)))
   (mapcar (lambda (id)
             (cons id (sns-roam-expand id)))
@@ -258,6 +260,7 @@ should be your synthesis in your own words.
 **Stage 1 — seed by metadata.**
 
 ```elisp
+;;; -*- lexical-binding: t; -*-
 ;; /tmp/roam-fetch-seed.el
 (with-temp-file "/tmp/roam-fetch-seed.out"
   (let ((print-length nil) (print-level nil))
@@ -272,6 +275,7 @@ metadata returned hits.
 **Stage 3 — expand both seeds.**
 
 ```elisp
+;;; -*- lexical-binding: t; -*-
 ;; /tmp/roam-fetch-expand.el
 (let ((seeds '("9F66EA2C-..." "1ED2CABC-...")))
   (with-temp-file "/tmp/roam-fetch-expand.out"
@@ -287,6 +291,7 @@ cites `Observability` (forward edge into the use-case).
 **Stage 4 — mine each link's point.**
 
 ```elisp
+;;; -*- lexical-binding: t; -*-
 ;; /tmp/roam-fetch-mine.el
 (let ((targets '(("1ED2CABC-..." . 269) ("9F66EA2C-..." . 591))))
   (with-temp-file "/tmp/roam-fetch-mine.out"

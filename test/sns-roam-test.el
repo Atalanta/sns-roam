@@ -2405,5 +2405,209 @@ write it."
     (should (eq 'sns-roam-bad-tag (plist-get (cdr err) :kind)))
     (should (null (plist-get (cdr err) :tag)))))
 
+;;; --- slice 27: no Emacs warnings from reading notes or skill scripts ---
+
+(defun sns-roam-test--new-output (thunk)
+  "Call THUNK and return what it added to *Warnings* and *Messages*.
+The text is without properties, the two buffers' additions joined, so
+a test can look in it for a warning by its words."
+  (let* ((buffers (list (get-buffer-create "*Warnings*") (messages-buffer)))
+         (starts (mapcar (lambda (buffer)
+                           (with-current-buffer buffer (point-max)))
+                         buffers)))
+    (funcall thunk)
+    (mapconcat (lambda (buffer-and-start)
+                 (with-current-buffer (car buffer-and-start)
+                   (buffer-substring-no-properties (cdr buffer-and-start)
+                                                   (point-max))))
+               (cl-mapcar #'cons buffers starts)
+               "")))
+
+(defconst sns-roam-test--slice-27-notes
+  '(("tides.org"
+     ":PROPERTIES:\n:ID: slice-27-tides\n:END:\n#+title: Tide tables\n\n"
+     "Tide tables for the harbour.\n\nHigh tide at noon, low tide at six.\n\n"
+     "* Spring tides\nThe moon pulls the sea, and the tide follows.\n")
+    ("moon.org"
+     ":PROPERTIES:\n:ID: slice-27-moon\n:END:\n#+title: Moon\n\n"
+     "The moon sets the TIDE.\n\n- tide one\n- moon two\n")
+    ("harbour.org"
+     ":PROPERTIES:\n:ID: slice-27-harbour\n:END:\n#+title: Harbour\n\n"
+     "| harbour | tide |\n|---------+------|\n| one     | two  |\n\n"
+     "#+begin_quote\nMoon over the harbour.\n#+end_quote\n")
+    ("loose.org"
+     "#+title: Loose\n\nTide charts and the moon, in a file with no ID.\n"))
+  "Each slice 27 note as (FILE-NAME TEXT...), the text in pieces.
+Several notes and lines match each of `sns-roam-test--slice-27-queries'.")
+
+(defconst sns-roam-test--slice-27-queries '("tide" "moon" "harbour")
+  "The queries whose body-search results slice 27 recorded.")
+
+(defconst sns-roam-test--slice-27-bodies
+  '("Tide tables.\n"
+    "First paragraph.\n\n- one\n- two\n\n| a | b |\n|---+---|\n| 1 | 2 |\n"
+    "#+begin_quote\nThe moon.\n#+end_quote\n\nA [[id:x][link]] and *bold*.[fn:1]\n\n[fn:1] A footnote.\n")
+  "The bodies whose parsed elements slice 27 recorded.")
+
+(defconst sns-roam-test--slice-27-results-file
+  (expand-file-name "body-results-slice-27.eld"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "What `sns-roam-test--slice-27-results' returned before slice 27.")
+
+(defun sns-roam-test--register-slice-27-notes ()
+  "Write and index each of `sns-roam-test--slice-27-notes'."
+  (dolist (note sns-roam-test--slice-27-notes)
+    (sns-roam-test--register (expand-file-name (car note) org-roam-directory)
+                             (apply #'concat (cdr note)))))
+
+(defun sns-roam-test--node-signature (node)
+  "Return NODE, an org-ml node or string, as a value that prints and reads.
+A node becomes its type, positions, blank lines, text and children's
+signatures, which drops the buffer and parent links a node holds."
+  (if (stringp node)
+      (substring-no-properties node)
+    (list (org-ml-get-type node)
+          (mapcar (lambda (property) (org-element-property property node))
+                  '(:begin :end :contents-begin :contents-end
+                    :post-affiliated :post-blank))
+          (org-ml-to-string node)
+          (mapcar #'sns-roam-test--node-signature
+                  (org-element-contents node)))))
+
+(defun sns-roam-test--slice-27-results ()
+  "Return the body-search and body-parse results slice 27 compares.
+The value is (:searches ((QUERY . HITS) ...) :bodies ((BODY . NODES) ...)),
+with paths made portable and each node as its signature.  Run inside
+`sns-roam-test--with-roam-dir' after the notes are registered."
+  (sns-roam-test--portable
+   (list :searches (mapcar (lambda (query)
+                             (cons query (sns-roam-body-search query)))
+                           sns-roam-test--slice-27-queries)
+         :bodies (mapcar (lambda (body)
+                           (cons body (mapcar #'sns-roam-test--node-signature
+                                              (sns-roam--parse-body-elements body))))
+                         sns-roam-test--slice-27-bodies))))
+
+(ert-deftest sns-roam-body-search-and-parse-return-what-slice-27-recorded ()
+  ;; Putting the parsing buffers in org-mode changes no result.
+  (let ((recorded (with-temp-buffer
+                    (insert-file-contents sns-roam-test--slice-27-results-file)
+                    (read (current-buffer)))))
+    (sns-roam-test--with-roam-dir
+      (sns-roam-test--register-slice-27-notes)
+      (should (equal recorded (sns-roam-test--slice-27-results))))))
+
+(ert-deftest sns-roam-search-and-set-body-print-no-org-element-warning ()
+  ;; S27.1 and S27.2.
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "tides.org" org-roam-directory)))
+      (sns-roam-test--register
+       file ":PROPERTIES:\n:ID: tide-id\n:END:\n#+title: Tides\n\nTide tables\n")
+      (unwind-protect
+          (let* ((hits nil)
+                 (output
+                  (sns-roam-test--new-output
+                   (lambda ()
+                     (setq hits (sns-roam-body-search "tide"))
+                     (sns-roam--parse-body-elements "Tide tables, revised.")
+                     (sns-roam-set-body "tide-id" "Tide tables, revised.")))))
+            (should (equal '("Tide tables") (mapcar (lambda (hit)
+                                                      (plist-get hit :hit-text))
+                                                    hits)))
+            (should (equal "Tide tables, revised."
+                           (mapconcat #'org-ml-to-trimmed-string
+                                      (plist-get (sns-roam-body-elements "tide-id")
+                                                 :elements)
+                                      "\n")))
+            (should-not (string-match-p "org-element" output)))
+        (sns-roam-test--kill-file-buffer file)))))
+
+(defconst sns-roam-test--skill-files
+  (mapcar (lambda (skill)
+            (expand-file-name (format "../skills/%s/SKILL.md" skill)
+                              (file-name-directory
+                               (or load-file-name buffer-file-name))))
+          '("roam-fetch" "roam-distill"))
+  "The skill files whose Lisp script templates Claude writes and loads.")
+
+(defconst sns-roam-test--lexical-binding-cookie-regexp
+  "\\`;;;? -\\*- lexical-binding: t; -\\*-\n"
+  "Matches the cookie line every Lisp script template in a skill starts with.
+roam-fetch writes it after three semicolons and roam-distill after two.")
+
+(defconst sns-roam-test--skill-fragments
+  '("(with-temp-file \"/tmp/<task>.out\""
+    "(package-vc-install '(sns-roam-api :url \"https://github.com/Atalanta/sns-roam\"))"
+    "(package-vc-install '(sns-roam-api :url \"https://github.com/Atalanta/sns-roam\"))")
+  "First line of each elisp block in the skills that is not a script.
+They are the file-and-load output fragment and the two install lines.")
+
+(defun sns-roam-test--elisp-blocks (file)
+  "Return the text of each elisp code block in the markdown FILE.
+Each block loses the indentation of its opening fence."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((blocks nil))
+      (while (re-search-forward "^\\( *\\)```elisp\n" nil t)
+        (let* ((indentation (match-string 1))
+               (start (point))
+               (end (progn
+                      (re-search-forward
+                       (concat "^" (regexp-quote indentation) "```$"))
+                      (match-beginning 0)))
+               (text (buffer-substring-no-properties start end)))
+          (push (if (string-empty-p indentation)
+                    text
+                  (replace-regexp-in-string
+                   (concat "^" (regexp-quote indentation)) "" text t t))
+                blocks)))
+      (nreverse blocks))))
+
+(defun sns-roam-test--first-line (text)
+  "Return the first line of TEXT."
+  (car (split-string text "\n")))
+
+(ert-deftest sns-roam-skill-scripts-load-without-a-lexical-binding-warning ()
+  ;; S27.3: every script template starts with the cookie, and loads
+  ;; with no warning about it.
+  (let* ((directory (make-temp-file "sns-roam-skill-scripts" t))
+         (blocks (mapcan #'sns-roam-test--elisp-blocks sns-roam-test--skill-files))
+         (scripts (seq-filter (lambda (block)
+                                (string-match-p
+                                 sns-roam-test--lexical-binding-cookie-regexp
+                                 block))
+                              blocks)))
+    (unwind-protect
+        (progn
+          (should (equal sns-roam-test--skill-fragments
+                         (mapcar #'sns-roam-test--first-line
+                                 (seq-difference blocks scripts))))
+          (should (= 6 (length scripts)))
+          (cl-loop
+           for script in scripts
+           for index from 1
+           do (let ((file (expand-file-name (format "script-%d.el" index)
+                                            directory)))
+                ;; Each script writes its result under /tmp; this one
+                ;; writes it in the test's own directory.
+                (with-temp-file file
+                  (insert (string-replace "/tmp/" (file-name-as-directory directory)
+                                          script)))
+                (should-not
+                 (string-match-p
+                  "lexical-binding"
+                  (sns-roam-test--new-output
+                   (lambda ()
+                     ;; The templates name notes that do not exist, so
+                     ;; each sns-roam call they make returns nil.
+                     (cl-letf (((symbol-function 'sns-roam-find-by-metadata) #'ignore)
+                               ((symbol-function 'sns-roam-expand) #'ignore)
+                               ((symbol-function 'sns-roam-excerpt) #'ignore)
+                               ((symbol-function 'sns-roam-history-anchor) #'ignore)
+                               ((symbol-function 'sns-roam-body-elements) #'ignore)
+                               ((symbol-function 'sns-roam-insert-element) #'ignore))
+                       (load-file file)))))))))
+      (delete-directory directory t))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

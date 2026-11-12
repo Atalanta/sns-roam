@@ -52,6 +52,7 @@ result into `/tmp/<task>.out` with `with-temp-file`, load it with
 `emacsclient -e '(load-file "/tmp/<task>.el")' >/dev/null`, then `cat` the
 `.out`. The `load-file` return value is swallowed — capture to a file, do
 not rely on stdout.
+Every script starts with the line `;;; -*- lexical-binding: t; -*-`.
 
 ---
 
