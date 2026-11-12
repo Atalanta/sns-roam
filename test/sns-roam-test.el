@@ -1303,7 +1303,8 @@ to.  Kills every note buffer afterwards, under its old or new name."
                                  :text "New intro.\n\n"))
                      (sns-roam--section-edits
                       (org-ml-get-children section)
-                      (org-ml-get-children new-section)))))))
+                      (org-ml-get-children new-section)
+                      (org-ml-get-property :end section)))))))
 
 (ert-deftest sns-roam-tests-use-a-temporary-database ()
   ;; The test file sets the location before it loads org-roam, so the
@@ -1398,7 +1399,8 @@ ID \"other-id\" is there to link to."
                    (org-ml-get-children section)
                    (mapcar (lambda (child)
                              (if (eq child table) spaced-table child))
-                           (org-ml-get-children section))))
+                           (org-ml-get-children section))
+                   (org-ml-get-property :end section)))
            (edit (car edits))
            (begin (sns-roam--edit-begin edit)))
       (should (= 1 (length edits)))
@@ -1455,7 +1457,7 @@ TEXT has no final newline; see `sns-roam-test--with-bare-note'."
       ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: X\nOne.\n\nTwo.\n"
     (let ((before (sns-roam-test--file-text file)))
       (cl-letf (((symbol-function 'sns-roam--section-edits)
-                 (lambda (old-children _new-children)
+                 (lambda (old-children _new-children _section-end)
                    (let ((two (car (last old-children))))
                      (list (list :begin (org-ml-get-property :begin two)
                                  :end   (org-ml-get-property :begin two)
@@ -2234,6 +2236,11 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
              sns-roam-reparse-mismatch sns-roam-unknown-id sns-roam-missing-file
              sns-roam-malformed-note sns-roam-diff-failure)
      :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-add-under-heading
+     :returns (:id :file :point :diff)
+     :names (sns-roam-match-count sns-roam-unsupported-element
+             sns-roam-diff-failure)
+     :inherits (,sns-roam-test--write-boundary))
     (sns-roam-history-anchor
      :returns (:id :file :anchor :after)
      :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-bad-date
@@ -2489,6 +2496,9 @@ write it."
                     (sns-roam-subtree
                      "sea-id"
                      (plist-get (car (sns-roam-body-search "No waves")) :point)))
+            (record 'sns-roam-add-under-heading
+                    (sns-roam-add-under-heading
+                     "sea-id" '("Calm") (org-ml-build-paragraph "Flat water.")))
             (record 'sns-roam-append-link
                     (sns-roam-append-link moon-id tide-id "tides" "It drives " "."))
             (record 'sns-roam-expand (sns-roam-expand tide-id))
@@ -2809,6 +2819,146 @@ Each block loses the indentation of its opening fence."
                        (plist-get (sns-roam-subtree "deploy-id" point) :text)))
         (should (string-match-p "kubectl"
                                 (plist-get (sns-roam-excerpt "deploy-id" point) :text)))))))
+
+;;; --- slice 29: add a paragraph under a heading ---
+
+(defconst sns-roam-test--gamma "Gamma starts in December."
+  "The paragraph the slice 29 tests add under a heading.")
+
+(defun sns-roam-test--add-gamma (outline-path)
+  "Add `sns-roam-test--gamma' under OUTLINE-PATH in note \"bare-id\"."
+  (sns-roam-add-under-heading "bare-id" outline-path
+                              (org-ml-build-paragraph sns-roam-test--gamma)))
+
+(defun sns-roam-test--should-start-gamma (file result)
+  "Show that RESULT's :point is where `sns-roam-test--gamma' starts in FILE."
+  (let ((text (sns-roam-test--file-text file)))
+    (should (equal sns-roam-test--gamma
+                   (substring text (1- (plist-get result :point))
+                              (+ (1- (plist-get result :point))
+                                 (length sns-roam-test--gamma)))))))
+
+(defun sns-roam-test--should-refuse-path (file before outline-path count)
+  "Show that adding under OUTLINE-PATH raises with COUNT and leaves FILE as BEFORE."
+  (let ((data (sns-roam-test--error-data
+               'sns-roam-match-count
+               (lambda () (sns-roam-test--add-gamma outline-path)))))
+    (sns-roam-test--should-have data
+                                :count count :path outline-path
+                                :id "bare-id" :file file
+                                :operation 'sns-roam-add-under-heading)
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-add-under-heading-keeps-a-typed-list ()
+  ;; S29.1.  On 2026-11-09 org-ml's own update of the subtree printed
+  ;; `1)' as `1.'.  The note has no text before its first heading.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\n1) Alpha\n2) Beta\n\n* Other\nOther text.\n"
+    (let ((result (sns-roam-test--add-gamma '("Projects"))))
+      (should (equal (list :removed () :added (list sns-roam-test--gamma ""))
+                     (sns-roam-test--changed-lines
+                      before (sns-roam-test--file-text file))))
+      (should (string-search "\n1) Alpha\n2) Beta\n\nGamma starts in December.\n\n* Other\n"
+                             (sns-roam-test--file-text file)))
+      (sns-roam-test--should-start-gamma file result)
+      (should (string-match-p "^\\+Gamma starts in December\\.$"
+                              (plist-get result :diff))))))
+
+(ert-deftest sns-roam-add-under-heading-goes-before-a-child-heading ()
+  ;; S29.2.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\nOwn paragraph.\n\n** Tickets\n|a|b|\n"
+    (let ((result (sns-roam-test--add-gamma '("Projects"))))
+      (should (equal (list :removed () :added (list sns-roam-test--gamma ""))
+                     (sns-roam-test--changed-lines
+                      before (sns-roam-test--file-text file))))
+      (should (string-suffix-p
+               "* Projects\nOwn paragraph.\n\nGamma starts in December.\n\n** Tickets\n|a|b|\n"
+               (sns-roam-test--file-text file)))
+      (sns-roam-test--should-start-gamma file result))))
+
+(ert-deftest sns-roam-add-under-heading-refuses-a-path-that-names-two ()
+  ;; S29.3.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Notes\nOne.\n* Notes\nTwo.\n"
+    (sns-roam-test--should-refuse-path file before '("Notes") 2)))
+
+(ert-deftest sns-roam-add-under-heading-refuses-a-path-that-names-nothing ()
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\nOne.\n** Tickets\nT.\n"
+    (sns-roam-test--should-refuse-path file before '("Missing") 0)
+    ;; A child's title alone does not name it from the top.
+    (sns-roam-test--should-refuse-path file before '("Tickets") 0)))
+
+(ert-deftest sns-roam-add-under-heading-fills-an-empty-section ()
+  ;; The heading has no text of its own, so its section is empty and the
+  ;; paragraph goes straight after its title line.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\nIntro.\n\n* Projects\n* Other\nOther text.\n"
+    (let ((result (sns-roam-test--add-gamma '("Projects"))))
+      (should (equal (list :removed () :added (list sns-roam-test--gamma ""))
+                     (sns-roam-test--changed-lines
+                      before (sns-roam-test--file-text file))))
+      (should (string-search "\n* Projects\nGamma starts in December.\n\n* Other\n"
+                             (sns-roam-test--file-text file)))
+      (sns-roam-test--should-start-gamma file result))))
+
+(ert-deftest sns-roam-add-under-heading-follows-a-nested-path ()
+  ;; A top-level `* Tickets' has the same title, and the path passes it by.
+  (sns-roam-test--with-bare-note
+      (concat ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n"
+              "* Tickets\nTop level.\n\n"
+              "* Projects\nProjects text.\n\n** Tickets\nNested.\n\n** Later\nL.\n")
+    (let ((result (sns-roam-test--add-gamma '("Projects" "Tickets"))))
+      (should (equal (list :removed () :added (list sns-roam-test--gamma ""))
+                     (sns-roam-test--changed-lines
+                      before (sns-roam-test--file-text file))))
+      (should (string-search "** Tickets\nNested.\n\nGamma starts in December.\n\n** Later\n"
+                             (sns-roam-test--file-text file)))
+      (sns-roam-test--should-start-gamma file result))))
+
+(ert-deftest sns-roam-add-under-heading-refuses-a-list ()
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\nOne.\n"
+    (let ((data (sns-roam-test--error-data
+                 'sns-roam-unsupported-element
+                 (lambda ()
+                   (sns-roam-add-under-heading
+                    "bare-id" '("Projects")
+                    (org-ml-build-plain-list (org-ml-build-item! :paragraph "x")))))))
+      (sns-roam-test--should-have data
+                                  :type 'plain-list :id "bare-id" :file file
+                                  :operation 'sns-roam-add-under-heading)
+      (should (equal before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-add-under-heading-refuses-an-edit-that-reads-back-wrong ()
+  ;; The forced edit writes into the heading's section with no line break
+  ;; before its second paragraph, so the two would read back as one.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\nOne.\n\nTwo.\n"
+    (let ((buffer (find-file-noselect file)))
+      (cl-letf (((symbol-function 'sns-roam--section-edits)
+                 (lambda (old-children _new-children _section-end)
+                   (let ((two (car (last old-children))))
+                     (list (list :begin (org-ml-get-property :begin two)
+                                 :end   (org-ml-get-property :begin two)
+                                 :text  "Merged "))))))
+        (let ((data (sns-roam-test--error-data
+                     'sns-roam-reparse-mismatch
+                     (lambda () (sns-roam-test--add-gamma '("Projects"))))))
+          (sns-roam-test--should-have data
+                                      :id "bare-id" :file file
+                                      :operation 'sns-roam-add-under-heading)
+          ;; The lists are the heading's own section, not the first one.
+          (should (equal `((paragraph "One.") (paragraph "Two.")
+                           (paragraph ,sns-roam-test--gamma))
+                         (plist-get data :planned)))
+          (should (equal '((paragraph "One.") (paragraph "Merged Two."))
+                         (plist-get data :actual)))))
+      (should (equal before (sns-roam-test--file-text file)))
+      (with-current-buffer buffer
+        (should (equal before (buffer-string)))
+        (should-not (buffer-modified-p))))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

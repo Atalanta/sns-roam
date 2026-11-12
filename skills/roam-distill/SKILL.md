@@ -269,7 +269,9 @@ Write:
   org prose (drawer + `#+title` preserved). Replaces only the text before the
   first heading; existing `* ` headings and their content stay. Use when
   rewriting a note that has no headings (e.g. a sparse fleeting note). It
-  cannot change a heading: tell the owner to edit that section by hand.
+  cannot change a heading. To add a paragraph under one, use
+  `add-under-heading`; for any other change there, tell the owner to edit
+  that section by hand.
 - `(sns-roam-replace-element ID PRED NEW-ELEMENT)` → `(:id :file :diff)`. **Transform:**
   replaces the single body element matching PRED (a unary org-ml-node predicate)
   with NEW-ELEMENT (a built org-ml node). Asserts exactly one match — loud error
@@ -285,6 +287,17 @@ Write:
   read back as the planned elements is a loud `sns-roam:` error, and the
   file is unchanged. Use to add a history line to a reference note. Reaches
   only the text before the first heading.
+- `(sns-roam-add-under-heading ID OUTLINE-PATH NEW-ELEMENT)` → `(:id :file :point :diff)`.
+  Adds NEW-ELEMENT, a paragraph built with `org-ml-build-paragraph`, at the
+  end of a heading's own text, before any child heading. OUTLINE-PATH is the
+  heading titles from a top-level heading down, such as
+  `("Projects" "Tickets")`: the `:raw-value`s of the `:outline` that
+  `sns-roam-subtree` returns. `:point` is where the new paragraph starts.
+  Every other line keeps its text, a typed `1)` list included. A path that
+  names no heading or several raises `sns-roam-match-count` with `:count`
+  and `:path`, a NEW-ELEMENT that is not a paragraph raises
+  `sns-roam-unsupported-element`, and the file is unchanged. Use to add to a
+  section of a note with headings.
 - `(sns-roam-set-tags ID TAGS)` → `(:id :file :diff)`. **The way to tag a
   note.** Sets the full tag list: TAGS is a list of strings, written as one
   `#+filetags: :t1:t2:` line directly under `#+title:`; any other
@@ -445,15 +458,22 @@ a forward neighbour of FROM.
 When a note's body needs changing — retighten a claim, fix a stale sentence,
 plain back flourish, promote a fleeting note — use `replace-element` for a
 single element, or `set-body` to rewrite the text before the first heading.
-Neither reaches a heading or the content under one; for those, tell the owner
-to edit the section by hand.
+Neither reaches a heading or the content under one. To add a paragraph under a
+heading, use `add-under-heading`; for any other change there, tell the owner to
+edit the section by hand.
 
 1. **Read the note.** Fetch the body with `(sns-roam-body-elements ID)`,
    never by reading the file. With the file-and-load idiom, the script writes
    `(mapcar #'org-ml-to-trimmed-string (plist-get result :elements))` to the
    `.out` file. Show those strings, in order, as the before text, and identify
-   the element to change. If `:elements` is nil, tell the owner the note has
-   no paragraphs before its first headline, and stop.
+   the element to change. When the change is under a heading, read that
+   heading's section instead. Run `(sns-roam-body-search TITLE)`, take the
+   `:point` of the hit in this note whose `:hit-text` is the heading's line,
+   and call `(sns-roam-subtree ID POINT)`. Show its `:text` as the before
+   text, and take the outline path from the `:raw-value` of each entry in its
+   `:outline`. If `:elements` is nil and the change is not under a
+   heading, tell the owner the note has no paragraphs before its first
+   headline, and stop.
 2. **Choose the tool.**
    - One paragraph/element changing, rest stays → `replace-element` (build a
      predicate that matches exactly that element, and the replacement AST).
@@ -463,6 +483,10 @@ to edit the section by hand.
      it). Never `set-body` for this.
    - Text before the first heading being rewritten (e.g. sparse fleeting note
      → full claim) → `set-body`. Headings stay as they are.
+   - One paragraph being added under a heading, rest stays →
+     `add-under-heading` (the outline path from step 1 and the new
+     paragraph's AST). It goes after the heading's own text, before any child
+     heading.
 3. **Build the replacement as AST.** Preserve any `[[id:]]` links the old
    element carried unless the edit deliberately drops them — reproduce them in
    the new element.
@@ -516,7 +540,8 @@ mechanically:
   the first heading, so you must reproduce everything you keep there and risk
   dropping content/links. Use `replace-element` with a narrow predicate.
 - **Do NOT use `set-body` or `replace-element` on a heading.** They cannot
-  reach one. Tell the owner to edit that section by hand.
+  reach one. To add a paragraph under a heading, use `add-under-heading`; for
+  any other change there, tell the owner to edit that section by hand.
 - **Do NOT write a loose `replace-element` predicate.** It must match exactly
   one element. Match on distinctive text; on zero/many it errors — tighten it,
   don't work around it.

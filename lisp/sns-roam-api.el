@@ -60,7 +60,7 @@ is left out when its value is nil.  KIND joins `sns-roam--error-kinds'."
     "no paragraph, item, quote or verse block encloses the point"
   (id point file))
 (sns-roam-define-error match-count "the match is not exactly one element"
-  (count &optional operation anchor))
+  (count &optional operation anchor path))
 (sns-roam-define-error unsupported-element
     "the operation does not take this element type"
   (type &optional operation title))
@@ -521,39 +521,60 @@ that section's children. Empty STRING yields nil."
            (section (car (org-ml-get-children tree))))
       (if section (org-ml-get-children section) nil))))
 
-(defun sns-roam--edit-section (id file section-fn)
-  "Apply pure SECTION-FN to the first section of the current buffer.
-Parses the buffer as it is narrowed, so the caller widens it first.
-Raises before anything is written when the note of ID in FILE has no
-first section, when SECTION-FN raises, or when the edits would not
-read back as planned.  Returns what `sns-roam--apply-edits' returns."
-  (let ((section (car (org-ml-get-children (org-ml-parse-this-buffer)))))
+(defun sns-roam--first-section-target (tree)
+  "Return the note's first section in TREE, a parse, as an edit target.
+The target is (:section SECTION :end END), END being where the last
+child of SECTION ends.  Raises `sns-roam-malformed-note' when TREE
+opens on a heading, so the note has no first section.  Pure."
+  (let ((section (car (org-ml-get-children tree))))
     (unless (and section (org-ml-is-type 'section section))
-      (sns-roam--signal-malformed-note 'section id file))
-    (let* ((new-section (funcall section-fn section))
-           (edits       (sns-roam--section-edits
-                         (org-ml-get-children section)
-                         (org-ml-get-children new-section))))
-      (sns-roam--check-edits edits new-section file)
-      (sns-roam--apply-edits edits))))
+      (sns-roam--signal-malformed-note 'section))
+    (list :section section
+          :end     (org-ml-get-property
+                    :end (car (last (org-ml-get-children section)))))))
 
-(defun sns-roam--update-section (operation id section-fn)
+(defun sns-roam--edit-section (locate file section-fn)
+  "Apply pure SECTION-FN to the section LOCATE finds in the current buffer.
+LOCATE is a function from a parse of the buffer to an edit target,
+such as `sns-roam--first-section-target'.  A target is (:section
+SECTION :end END): SECTION is the parsed section, or nil for a
+heading that has none, and END is where text after its last child
+goes.  SECTION-FN gets an empty section in place of nil.
+Parses the buffer as it is narrowed, so the caller widens it first.
+Raises before anything is written when LOCATE raises, when
+SECTION-FN raises, or when the edits would not read back as planned
+in FILE.  Returns what `sns-roam--apply-edits' returns."
+  (let* ((target      (funcall locate (org-ml-parse-this-buffer)))
+         (section     (or (plist-get target :section) (org-ml-build-section)))
+         (new-section (funcall section-fn section))
+         (edits       (sns-roam--section-edits
+                       (org-ml-get-children section)
+                       (org-ml-get-children new-section)
+                       (plist-get target :end))))
+    (sns-roam--check-edits edits new-section locate file)
+    (sns-roam--apply-edits edits)))
+
+(defun sns-roam--update-section (operation id section-fn &optional locate)
   "Apply pure SECTION-FN (section -> section) to node ID and save.
-The single write boundary for every mutation of the note's first
-section.  It parses the buffer, applies SECTION-FN, and writes only
-the children whose text changed, as `sns-roam--section-edits'
-decides.  Every child SECTION-FN left alone, and every headline after
-the section, keeps the text the owner typed.  SECTION-FN raises
-before anything is written, so a refusal leaves the buffer as it was.
+The single write boundary for every mutation of a note's body.  It
+parses the buffer, applies SECTION-FN to the section LOCATE finds,
+and writes only the children whose text changed, as
+`sns-roam--section-edits' decides.  LOCATE is a function from the
+parse to an edit target, as `sns-roam--edit-section' describes; nil
+means `sns-roam--first-section-target', the note's first section.
+Every child SECTION-FN left alone, and every other part of the note,
+keeps the text the owner typed.  SECTION-FN raises before anything is
+written, so a refusal leaves the buffer as it was.
 OPERATION is the symbol of the public function that called, such as
 `sns-roam-insert-element'.  An `sns-roam-error' raised while the
-section is planned and checked gains :id, :file and :operation.
-Loud failure on unknown ID or malformed file.  Returns (:id :file
-:diff), where :diff is `sns-roam--file-diff' of the note's file as
-it was on disk before the call and as the save left it, \"\" when the
-file did not change.  The save also writes edits the owner had not yet
-saved in the buffer, so the diff shows them too."
-  (let ((file (sns-roam--node-file-or-error id)))
+section is found, planned and checked gains :id, :file and
+:operation.  Loud failure on unknown ID or malformed file.  Returns
+\(:id :file :diff), where :diff is `sns-roam--file-diff' of the
+note's file as it was on disk before the call and as the save left
+it, \"\" when the file did not change.  The save also writes edits the
+owner had not yet saved in the buffer, so the diff shows them too."
+  (let ((file   (sns-roam--node-file-or-error id))
+        (locate (or locate #'sns-roam--first-section-target)))
     (with-current-buffer (find-file-noselect file)
       ;; The file on disk, not the buffer: the save below also writes any
       ;; edits the owner has not saved, and the diff must show them.
@@ -573,7 +594,7 @@ saved in the buffer, so the diff shows them too."
                                   (cons (point-min) (point-max))))
                   (replacements (save-restriction
                                   (widen)
-                                  (sns-roam--edit-section id file section-fn))))
+                                  (sns-roam--edit-section locate file section-fn))))
              (when narrowing
                (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
                  (narrow-to-region (car bounds) (cdr bounds)))))))
@@ -642,11 +663,12 @@ with no blank lines.  Pure."
         (sns-roam--signal-unsupported-element (org-ml-get-type child)))
       (substring printed (length content)))))
 
-(defun sns-roam--run-edit (old-children from to new-nodes blank-lines)
+(defun sns-roam--run-edit (old-children from to new-nodes blank-lines section-end)
   "Return the edit that replaces OLD-CHILDREN from index FROM up to TO with NEW-NODES.
 The edit is (:begin B :end E :text TEXT), where TEXT is the
 `org-ml-to-string' text of NEW-NODES.  B is where the child at FROM
-begins, or where the last child ends when FROM is past the end.  E is
+begins, or SECTION-END, where the section's text ends, when FROM is
+past the last child.  E is
 where the child before TO ends, or B when the run removes no child.
 A section's children follow each other with no text between them, so
 these bounds cover exactly the removed children.
@@ -660,7 +682,7 @@ Returns nil when the edit would remove and add nothing.  Pure."
   (when (or blank-lines (< from to) new-nodes)
     (let* ((begin (if (< from (length old-children))
                       (org-ml-get-property :begin (nth from old-children))
-                    (org-ml-get-property :end (car (last old-children)))))
+                    section-end))
            (end   (if (< from to)
                       (org-ml-get-property :end (nth (1- to) old-children))
                     begin))
@@ -669,10 +691,12 @@ Returns nil when the edit would remove and add nothing.  Pure."
           (list :blank-lines-end begin :end end :text (concat blank-lines text))
         (list :begin begin :end end :text text)))))
 
-(defun sns-roam--section-edits (old-children new-children)
+(defun sns-roam--section-edits (old-children new-children section-end)
   "Return the edits that turn the text of OLD-CHILDREN into NEW-CHILDREN.
-OLD-CHILDREN are a section's parsed children; NEW-CHILDREN are the
-children a transform returned for it.  Each new child that
+OLD-CHILDREN are a section's parsed children, possibly none;
+NEW-CHILDREN are the children a transform returned for it.
+SECTION-END is where the section's text ends, where new children
+after the last old one go.  Each new child that
 `sns-roam--kept-index' finds unchanged keeps its typed text, apart
 from blank lines it gains or loses.  Each run of other children
 between two kept ones becomes one edit from `sns-roam--run-edit',
@@ -688,7 +712,7 @@ leaves the positions of the rest as the parse gave them.  Pure."
           (progn
             (push (sns-roam--run-edit old-children from kept
                                       (reverse pending-new-nodes)
-                                      blank-lines)
+                                      blank-lines section-end)
                   edits)
             (setq blank-lines (sns-roam--blank-lines-text
                                (nth kept old-children) child)
@@ -697,7 +721,7 @@ leaves the positions of the rest as the parse gave them.  Pure."
         (push child pending-new-nodes)))
     (push (sns-roam--run-edit old-children from (length old-children)
                               (reverse pending-new-nodes)
-                              blank-lines)
+                              blank-lines section-end)
           edits)
     (delq nil edits)))
 
@@ -790,14 +814,16 @@ or shrunk only by what a replacement changed inside it.  Pure."
                   (org-ml-to-trimmed-string child)))
           children))
 
-(defun sns-roam--check-edits (edits new-section file)
+(defun sns-roam--check-edits (edits new-section locate file)
   "Raise unless making EDITS gives the current buffer NEW-SECTION's children.
 Copies the buffer into a temporary one, makes EDITS there, and parses
-the result.  The first section's children must match NEW-SECTION's
-by type and trimmed text, or `sns-roam-reparse-mismatch' names FILE
-and both lists, and the note's buffer is left as it was.  This catches any edit whose text
-would read back as something else, such as two elements merged by a
-missing line break."
+the result.  The children of the section LOCATE finds in that parse
+must match NEW-SECTION's by type and trimmed text, or
+`sns-roam-reparse-mismatch' names FILE and both lists, and the note's
+buffer is left as it was.  This catches any edit whose text would read
+back as something else, such as two elements merged by a missing line
+break.  LOCATE raises, as it does on the buffer, when the copy has no
+such section."
   (let* ((text     (save-restriction
                      (widen)
                      (buffer-substring-no-properties (point-min) (point-max))))
@@ -805,10 +831,9 @@ missing line break."
                      (insert text)
                      (sns-roam--apply-edits edits)
                      (sns-roam--org-mode-for-parsing)
-                     (let ((first (car (org-ml-get-children
-                                        (org-ml-parse-this-buffer)))))
-                       (when (org-ml-is-type 'section first)
-                         (org-ml-get-children first))))))
+                     (org-ml-get-children
+                      (plist-get (funcall locate (org-ml-parse-this-buffer))
+                                 :section)))))
     (let ((planned (sns-roam--child-signature (org-ml-get-children new-section)))
           (actual  (sns-roam--child-signature reparsed)))
       (unless (equal planned actual)
@@ -1007,6 +1032,97 @@ Returns (:id :file)."
    'sns-roam-insert-element id
    (lambda (section)
      (sns-roam--insert-into-section section pred new-element after))))
+
+(defun sns-roam--headings-at-path (parent outline-path)
+  "Return the headings under PARENT that OUTLINE-PATH names, in buffer order.
+PARENT is a parse tree or a headline.  OUTLINE-PATH is a list of
+titles: the first names a child heading of PARENT by its raw title,
+the next a child heading of that one, and so on.  An empty
+OUTLINE-PATH names no heading.  Pure."
+  (when outline-path
+    (let ((matches (seq-filter
+                    (lambda (child)
+                      (and (org-ml-is-type 'headline child)
+                           (string= (car outline-path)
+                                    (org-ml-get-property :raw-value child))))
+                    (org-ml-get-children parent))))
+      (if (cdr outline-path)
+          (seq-mapcat (lambda (heading)
+                        (sns-roam--headings-at-path heading (cdr outline-path)))
+                      matches)
+        matches))))
+
+(defun sns-roam--heading-target (tree outline-path)
+  "Return the edit target of the heading OUTLINE-PATH names in TREE.
+The target is (:section SECTION :end END), as `sns-roam--edit-section'
+takes it.  SECTION is the heading's own section, or nil when the
+heading has no text before its first child heading.  END is where the
+section's last child ends, or with no section, where the heading's
+title line and the blank lines after it end.  Raises
+`sns-roam-match-count' with :path when OUTLINE-PATH names no heading
+or several.  Pure."
+  (let ((headings (sns-roam--headings-at-path tree outline-path)))
+    (unless (= 1 (length headings))
+      (sns-roam--signal-match-count (length headings) nil nil outline-path))
+    (let* ((heading (car headings))
+           (section (seq-find (lambda (child) (org-ml-is-type 'section child))
+                              (org-ml-get-children heading))))
+      (list :section section
+            :end     (if section
+                         (org-ml-get-property
+                          :end (car (last (org-ml-get-children section))))
+                       (or (org-ml-get-property :contents-begin heading)
+                           (org-ml-get-property :end heading)))))))
+
+(defun sns-roam--add-to-section (section new-element)
+  "Return SECTION with paragraph NEW-ELEMENT after its last child.
+With children, NEW-ELEMENT is spaced as `sns-roam--insert-beside'
+spaces an element after the last child.  SECTION may have none, as
+for a heading with no text of its own, and NEW-ELEMENT then has one
+blank line after it.  Raises `sns-roam-unsupported-element' when
+NEW-ELEMENT is not a paragraph.  Pure."
+  (unless (org-ml-is-type 'paragraph new-element)
+    (sns-roam--signal-unsupported-element (org-ml-get-type new-element)
+                                          'sns-roam-add-under-heading))
+  (sns-roam--map-children
+   (lambda (children)
+     (if children
+         (sns-roam--insert-beside children (car (last children)) new-element t)
+       (list (org-ml-set-property :post-blank 1 new-element))))
+   section))
+
+(defun sns-roam--last-child-begin (file locate)
+  "Return where the last child of the section LOCATE finds begins in FILE.
+Parses all of the buffer visiting FILE, as the write boundary left it."
+  (with-current-buffer (find-file-noselect file)
+    (save-restriction
+      (widen)
+      (let ((target (funcall locate (org-ml-parse-this-buffer))))
+        (org-ml-get-property
+         :begin (car (last (org-ml-get-children (plist-get target :section)))))))))
+
+(defun sns-roam-add-under-heading (id outline-path new-element)
+  "Add paragraph NEW-ELEMENT to the heading of node ID that OUTLINE-PATH names.
+OUTLINE-PATH is a list of heading titles from a top-level heading
+down, such as (\"Projects\" \"Tickets\").  NEW-ELEMENT is a paragraph
+built with `org-ml-build-paragraph'.  It goes after the last element
+of the heading's own text, before any child heading, and every other
+element keeps its text.  Errors loudly, leaving the file unchanged,
+when OUTLINE-PATH names no heading or several, NEW-ELEMENT is not a
+paragraph, the result would not read back as planned, or ID is
+unknown.  Composes through `sns-roam--update-section'.
+Returns (:id :file :point :diff), where :point is where the new
+paragraph starts in the saved file."
+  (let* ((locate (lambda (tree) (sns-roam--heading-target tree outline-path)))
+         (result (sns-roam--update-section
+                  'sns-roam-add-under-heading id
+                  (lambda (section) (sns-roam--add-to-section section new-element))
+                  locate))
+         (file   (plist-get result :file)))
+    (list :id    id
+          :file  file
+          :point (sns-roam--last-child-begin file locate)
+          :diff  (plist-get result :diff))))
 
 (defconst sns-roam--history-date-regexp
   "\\`\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\):"
