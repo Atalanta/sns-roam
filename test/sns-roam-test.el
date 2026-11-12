@@ -2932,17 +2932,18 @@ Each block loses the indentation of its opening fence."
       (should (equal before (sns-roam-test--file-text file))))))
 
 (ert-deftest sns-roam-add-under-heading-refuses-an-edit-that-reads-back-wrong ()
-  ;; The forced edit writes into the heading's section with no line break
-  ;; before its second paragraph, so the two would read back as one.
+  ;; The forced edit deletes the blank line between the heading's two
+  ;; paragraphs, so they would read back as one.
   (sns-roam-test--with-bare-note
       ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\n* Projects\nOne.\n\nTwo.\n"
     (let ((buffer (find-file-noselect file)))
       (cl-letf (((symbol-function 'sns-roam--section-edits)
                  (lambda (old-children _new-children _section-end)
+                   ;; Delete the blank line between One. and Two.
                    (let ((two (car (last old-children))))
-                     (list (list :begin (org-ml-get-property :begin two)
+                     (list (list :begin (1- (org-ml-get-property :begin two))
                                  :end   (org-ml-get-property :begin two)
-                                 :text  "Merged "))))))
+                                 :text  ""))))))
         (let ((data (sns-roam-test--error-data
                      'sns-roam-reparse-mismatch
                      (lambda () (sns-roam-test--add-gamma '("Projects"))))))
@@ -2953,7 +2954,8 @@ Each block loses the indentation of its opening fence."
           (should (equal `((paragraph "One.") (paragraph "Two.")
                            (paragraph ,sns-roam-test--gamma))
                          (plist-get data :planned)))
-          (should (equal '((paragraph "One.") (paragraph "Merged Two."))
+          ;; The two paragraphs read back as one.
+          (should (equal '((paragraph "One.\nTwo."))
                          (plist-get data :actual)))))
       (should (equal before (sns-roam-test--file-text file)))
       (with-current-buffer buffer
