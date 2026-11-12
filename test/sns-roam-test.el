@@ -2006,6 +2006,28 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
       (should (equal "#+filetags: :a:b_2:\n"
                      (sns-roam-test--text-after-title file))))))
 
+(ert-deftest sns-roam-new-note-content-puts-tags-under-the-title ()
+  ;; The layout is a calculation: no file, clock or database is needed
+  ;; to see where the tag line, the body and the headlines go.
+  (should (equal (concat ":PROPERTIES:\n:ID:       fixed-id\n"
+                         ":CREATED:  [2026-11-12 Thu 09:00]\n:KIND:     permanent\n"
+                         ":ROAM_ALIASES: \"Leading\"\n:END:\n"
+                         "#+title: Leading teams\n#+filetags: :a:b_2:\n"
+                         "First.\n\nSecond.\n* Later\n")
+                 (sns-roam--new-note-content
+                  (list :id "fixed-id" :title "Leading teams" :kind "permanent"
+                        :created "[2026-11-12 Thu 09:00]" :aliases '("Leading")
+                        :tags '("a" "b_2")
+                        :elements (list (org-ml-build-paragraph "First.")
+                                        (org-ml-build-paragraph "Second.")
+                                        (org-ml-build-headline :title '("Later")))))))
+  (should (equal (concat ":PROPERTIES:\n:ID:       fixed-id\n"
+                         ":CREATED:  [2026-11-12 Thu 09:00]\n:KIND:     permanent\n:END:\n"
+                         "#+title: Untagged\n")
+                 (sns-roam--new-note-content
+                  (list :id "fixed-id" :title "Untagged" :kind "permanent"
+                        :created "[2026-11-12 Thu 09:00]")))))
+
 (ert-deftest sns-roam-create-node-refuses-a-bad-tag-and-leaves-no-file ()
   (sns-roam-test--with-roam-dir
     (sns-roam-test--should-have

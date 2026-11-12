@@ -1250,6 +1250,36 @@ appears before the first headline, as `sns-roam-set-body' writes it."
                   (butlast elements))
           (last elements)))
 
+(defun sns-roam--new-note-content (note)
+  "Return the text of a new roam file for NOTE, a plist of resolved values.
+NOTE holds :id, :title, :kind, :created (an inactive timestamp
+string), :aliases (a list of strings), :tags (a list of valid tags)
+and :elements (the body, as org-ml nodes).  The file opens with one
+section: the property drawer, #+title:, a #+filetags: line when
+:tags is non-empty, and every body element before the first
+headline.  The headlines follow as its siblings.  Pure."
+  (cl-destructuring-bind (&key id title kind created aliases tags elements)
+      note
+    (let* ((drawer (apply #'org-ml-build-property-drawer
+                          (sns-roam--build-header-properties id created kind aliases)))
+           (header (append (list drawer (org-ml-build-keyword "title" title))
+                           (when tags
+                             (list (org-ml-build-keyword
+                                    "filetags" (sns-roam--filetags-value tags))))))
+           ;; Body paragraphs and lists share the header's section; the
+           ;; first headline and everything after it sit beside it.
+           (first-headline (or (cl-position-if
+                                (lambda (element) (org-ml-is-type 'headline element))
+                                elements)
+                               (length elements)))
+           (section (apply #'org-ml-build-section
+                           (append header
+                                   (sns-roam--separate-body-elements
+                                    (cl-subseq elements 0 first-headline))))))
+      (mapconcat #'org-ml-to-string
+                 (cons section (cl-subseq elements first-headline))
+                 ""))))
+
 (defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source tags)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
@@ -1281,28 +1311,10 @@ Errors after indexing if ID does not resolve to the new file."
          (prefix   (sns-roam--filename-prefix-of created-time))
          (filename (concat prefix "-" slug ".org"))
          (path     (expand-file-name filename org-roam-directory))
-         (created  (sns-roam--org-timestamp-of created-time))
-         (props    (sns-roam--build-header-properties id created kind aliases))
-         (drawer   (apply #'org-ml-build-property-drawer props))
-         (kw       (org-ml-build-keyword "title" title))
-         (tags-kw  (and tags
-                        (list (org-ml-build-keyword "filetags"
-                                                    (sns-roam--filetags-value tags)))))
-         ;; Split ELEMENTS into the leading paragraph-ish section
-         ;; children (which co-exist with drawer + keyword in a single
-         ;; section) and the trailing headlines (which sit as siblings).
-         (split-pos (or (cl-position-if
-                         (lambda (e) (eq (org-ml-get-type e) 'headline))
-                         elements)
-                        (length elements)))
-         (section-children (sns-roam--separate-body-elements
-                            (cl-subseq elements 0 split-pos)))
-         (sibling-headlines (cl-subseq elements split-pos))
-         (section  (apply #'org-ml-build-section
-                          (append (list drawer kw) tags-kw section-children)))
-         (content  (mapconcat #'org-ml-to-string
-                              (cons section sibling-headlines)
-                              "")))
+         (content  (sns-roam--new-note-content
+                    (list :id id :title title :kind kind
+                          :created (sns-roam--org-timestamp-of created-time)
+                          :aliases aliases :tags tags :elements elements))))
     (when (file-exists-p path)
       (sns-roam--signal-file-exists id path))
     ;; org-roam only warns when it indexes a node whose ID another
