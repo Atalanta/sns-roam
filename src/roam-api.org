@@ -811,11 +811,17 @@ OPERATION is the symbol of the public function that called, such as
 `sns-roam-insert-element'.  An `sns-roam-error' raised while the
 section is planned and checked gains :id, :file and :operation.
 Loud failure on unknown ID or malformed file.  Returns (:id :file
-:diff), where :diff is `sns-roam--file-diff' of the note's widened
-text before the edit and after the save, \"\" when nothing changed."
+:diff), where :diff is `sns-roam--file-diff' of the note's file as
+it was on disk before the call and as the save left it, \"\" when the
+file did not change.  The save also writes edits the owner had not yet
+saved in the buffer, so the diff shows them too."
   (let ((file (sns-roam--node-file-or-error id)))
     (with-current-buffer (find-file-noselect file)
-      (let ((before (sns-roam--widened-text)))
+      ;; The file on disk, not the buffer: the save below also writes any
+      ;; edits the owner has not saved, and the diff must show them.
+      (let ((before (with-temp-buffer
+                      (insert-file-contents file)
+                      (buffer-string))))
         (sns-roam--call-with-context
          (list :id id :file file :operation operation)
          (lambda ()

@@ -1268,6 +1268,20 @@ to.  Kills every note buffer afterwards, under its old or new name."
     (sns-roam-set-property "typed-id" "KIND" "fleeting")
     (should (equal before (sns-roam-test--file-text file)))))
 
+(ert-deftest sns-roam-diff-shows-unsaved-edits-the-save-writes ()
+  ;; The owner has changed "Intro." to "Edited." in Emacs without
+  ;; saving.  A same-value property change saves the buffer, so the
+  ;; file changes, and the diff must say so rather than report nothing.
+  (sns-roam-test--with-typed-note
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-min))
+      (search-forward "Intro.")
+      (replace-match "Edited."))
+    (let ((diff (plist-get (sns-roam-set-property "typed-id" "KIND" "fleeting")
+                           :diff)))
+      (should (string-match-p "^-Intro\\.$" diff))
+      (should (string-match-p "^\\+Edited\\.$" diff)))))
+
 (ert-deftest sns-roam-section-edits-keep-unchanged-children-unwritten ()
   ;; The calculation needs no file: replacing one paragraph through a
   ;; transform, which copies the other children, gives one edit over
