@@ -28,15 +28,15 @@ The prose is 907 lines beside 1,244 lines of code, with 4 dates, 8 issue numbers
 
 ## Scenarios
 
-Scenario: S25.1 A section describes its function as it is now
+Scenario: S25.1 A section's contract matches its code
   Given the rewritten section on `sns-roam-insert-element`
-  When the owner reads it
-  Then it states what the function does, its arguments and return plist, the `sns-roam-` error kinds it raises, and its spacing rule, with no date, issue number or slice number
+  When the owner compares its Contract with a call to the function
+  Then the Contract names the same arguments, the same return keys, including `:diff`, and the same `sns-roam-` error kinds
 
-Scenario: S25.2 The prose follows the writing rules
+Scenario: S25.2 The prose holds no history and follows the writing rules
   Given the prose outside every source block in `src/roam-api.org`
-  When the owner runs `plain-style lint` on it
-  Then the linter reports no banned term
+  When the owner runs `plain-style lint` on it and searches it for dates, issue numbers and slice numbers
+  Then the linter reports no banned term, and the search finds nothing
 
 ## Facts the builder needs
 
@@ -50,4 +50,4 @@ None.
 
 ## Done when
 
-A script extracts every source block from `src/roam-api.org` on `main` and on the branch and shows the two lists identical, and `git diff main -- lisp/` is empty after `mise run tangle`. The builder shows `plain-style lint` passing on the extracted prose, and `grep -nE "20[0-9]{2}-[0-9]{2}-[0-9]{2}|issue #|[Ss]lice [0-9]"` finding nothing in it. The owner reads the sections on `sns-roam--update-section` and `sns-roam-insert-element`. `mise run check` and `mise run test` pass.
+A script extracts every source block from `src/roam-api.org` on `main` and on the branch and shows the two lists identical, and `git diff main -- lisp/` is empty after `mise run tangle`. The builder shows `plain-style lint` passing on the extracted prose, and `grep -nE "20[0-9]{2}-[0-9]{2}-[0-9]{2}|issue #|[Ss]lice [0-9]"` finding nothing in it. For every public `sns-roam-` function, the builder shows a table of the return keys and error kinds its Contract states beside those a test call returns and its code raises, and they match. The owner reads the sections on `sns-roam--update-section` and `sns-roam-insert-element`. `mise run check` and `mise run test` pass.
