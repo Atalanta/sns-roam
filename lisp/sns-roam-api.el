@@ -343,6 +343,49 @@ a property drawer — fix the upstream caller."
 (sns-roam-define-error no-heading "no heading encloses the point"
   (point file))
 
+(defun sns-roam--note-as-read (id)
+  "Read roam node ID's file and return its facts as a plist.
+
+The result:
+  (:id ID
+   :file FILE
+   :text TEXT
+   :tree ORG-DATA)
+
+TEXT is the file's text as read into a temporary buffer, and ORG-DATA
+is org-ml's parse of that buffer, so the tree's positions index TEXT
+from 1.  Loud failure if ID is unknown or its file is missing."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (sns-roam--org-mode-for-parsing)
+      (list :id   id
+            :file file
+            :text (buffer-substring-no-properties (point-min) (point-max))
+            :tree (org-ml-parse-this-buffer)))))
+
+(defun sns-roam--subtree-in-note (note point)
+  "Return the subtree of the innermost heading over POINT in NOTE.
+NOTE is a plist from `sns-roam--note-as-read'.  The result is the
+plist `sns-roam-subtree' returns.  Pure apart from signalling
+`sns-roam-no-heading' when POINT is before the first heading."
+  (let* ((text      (plist-get note :text))
+         (headlines (seq-filter (lambda (element)
+                                  (org-ml-is-type 'headline element))
+                                (sns-roam--ancestry-at-point
+                                 (plist-get note :tree) point)))
+         (innermost (car (last headlines))))
+    (unless innermost
+      (sns-roam--signal-no-heading point (plist-get note :file)))
+    ;; Org positions start at 1 and string indexes at 0.
+    (list :id      (plist-get note :id)
+          :file    (plist-get note :file)
+          :point   point
+          :text    (substring text
+                              (1- (org-ml-get-property :begin innermost))
+                              (1- (org-ml-get-property :end innermost)))
+          :outline (mapcar #'sns-roam--headline-to-plist headlines))))
+
 (defun sns-roam-subtree (id point)
   "Return the subtree of the innermost heading over POINT in node ID's file.
 
@@ -356,24 +399,7 @@ The result:
 TEXT is the file's text from the heading's first character to the end
 of its subtree, as typed.  Loud failure if ID is unknown or POINT is
 before the first heading."
-  (let ((file (sns-roam--node-file-or-error id)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (sns-roam--org-mode-for-parsing)
-      (let* ((headlines (seq-filter (lambda (element)
-                                      (org-ml-is-type 'headline element))
-                                    (sns-roam--ancestry-at-point
-                                     (org-ml-parse-this-buffer) point)))
-             (innermost (car (last headlines))))
-        (unless innermost
-          (sns-roam--signal-no-heading point file))
-        (list :id      id
-              :file    file
-              :point   point
-              :text    (buffer-substring-no-properties
-                        (org-ml-get-property :begin innermost)
-                        (org-ml-get-property :end innermost))
-              :outline (mapcar #'sns-roam--headline-to-plist headlines))))))
+  (sns-roam--subtree-in-note (sns-roam--note-as-read id) point))
 
 (require 'org-ml)
 

@@ -1581,6 +1581,38 @@ its :outline titles are OUTLINE."
                                   (lambda () (sns-roam-subtree "bare-id" point)))
        :point point :file file))))
 
+(defun sns-roam-test--note-from-text (text)
+  "Return the facts `sns-roam--note-as-read' gives, built from TEXT with no file."
+  (list :id   "value-id"
+        :file "/no/such/note.org"
+        :text text
+        :tree (with-temp-buffer
+                (insert text)
+                (sns-roam--org-mode-for-parsing)
+                (org-ml-parse-this-buffer))))
+
+(ert-deftest sns-roam-subtree-in-note-reads-a-section-from-values ()
+  (let* ((text   sns-roam-test--projects-note)
+         (result (sns-roam--subtree-in-note
+                  (sns-roam-test--note-from-text text)
+                  (sns-roam-test--position-of text "What the team"))))
+    (sns-roam-test--should-have result :id "value-id" :file "/no/such/note.org")
+    (should (equal (sns-roam-test--region text "* Projects" "* Next")
+                   (plist-get result :text)))
+    (should (equal '("Projects")
+                   (mapcar (lambda (headline) (plist-get headline :raw-value))
+                           (plist-get result :outline))))))
+
+(ert-deftest sns-roam-subtree-in-note-refuses-a-point-before-the-first-heading ()
+  (let* ((text  sns-roam-test--projects-note)
+         (point (sns-roam-test--position-of text "Before any heading")))
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-no-heading
+      (lambda ()
+        (sns-roam--subtree-in-note (sns-roam-test--note-from-text text) point)))
+     :point point :file "/no/such/note.org")))
+
 (ert-deftest sns-roam-subtree-leaves-the-file-unchanged ()
   (sns-roam-test--with-bare-note sns-roam-test--dashboards-note
     (let ((attributes (file-attribute-modification-time (file-attributes file))))
