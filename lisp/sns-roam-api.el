@@ -1388,17 +1388,16 @@ Slug derivation uses `org-roam-node-slug' for parity with the
 capture template. Returns a plist (:id :title :file :diff), where
 :diff is the title change `sns-roam-set-keyword' made, labelled with
 the file's name before the rename."
-  (let* ((title-write (sns-roam-set-keyword id "TITLE" new-title))
-         ;; Without org-roam-db-autosync-mode the database still holds
-         ;; the old title, and the slug would come from it.
-         (_           (org-roam-db-update-file (plist-get title-write :file)))
-         (node        (org-roam-node-from-id id))
-         (_           (unless node
-                        (sns-roam--signal-unknown-id id)))
-         (slug        (org-roam-node-slug node))
-         (new-path    (sns-roam-rename-file id slug)))
-    (list :id id :title new-title :file new-path
-          :diff (plist-get title-write :diff))))
+  (let ((title-write (sns-roam-set-keyword id "TITLE" new-title)))
+    ;; Without org-roam-db-autosync-mode the database still holds the
+    ;; old title, and the slug would come from it.
+    (org-roam-db-update-file (plist-get title-write :file))
+    (let ((node (org-roam-node-from-id id)))
+      (unless node
+        (sns-roam--signal-unknown-id id))
+      (list :id id :title new-title
+            :file (sns-roam-rename-file id (org-roam-node-slug node))
+            :diff (plist-get title-write :diff)))))
 
 (defun sns-roam--org-timestamp-of (time)
   "Return TIME as an inactive Org timestamp string,
