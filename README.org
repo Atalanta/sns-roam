@@ -9,7 +9,7 @@ The functions parse notes with org-ml and change only the elements an edit touch
 
 * How to install sns-roam and the roam skills
 
-You need Emacs 31.1 or later, org-roam with =org-roam-directory= set, and Claude Code.
+You need Emacs 31.1 or later, org-roam with =org-roam-directory= set, the system =diff= program, which macOS and Linux have, and Claude Code. Each edit returns a =diff -u= of the note's file before and after.
 
 1. Install the library from GitHub:
 

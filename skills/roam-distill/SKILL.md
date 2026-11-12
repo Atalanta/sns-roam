@@ -210,7 +210,9 @@ note file, and never place the line yourself or rewrite the body with
    ```
 
 6. **VERIFY** with `sns-roam-body-elements` that the line sits where step 4
-   showed it, and report any `:error` from step 5.
+   showed it, and report any `:error` from step 5. Show the user the `:diff`
+   of each result from step 5, and say "no change" for one whose `:diff` is
+   `""`.
 
 ### Person notes (`:KIND: person`)
 
@@ -249,24 +251,28 @@ Write:
   → `(:id :title :file)`. **ELEMENTS is a list of org-ml AST nodes** (the
   body). KIND is `"permanent"` for claims. Pass ID to use a pre-minted UUID.
   Errors if the destination file already exists.
-- `(sns-roam-append-link FROM-ID TO-ID LABEL BEFORE AFTER)` → `(:from :to :file)`.
+- Each primitive below that edits an existing note returns `:diff`: the
+  `diff -u` of the note's file before and after the edit, with both headers
+  naming the file. `""` means the note did not change. A refused edit raises
+  and returns no diff.
+- `(sns-roam-append-link FROM-ID TO-ID LABEL BEFORE AFTER)` → `(:from :to :file :diff)`.
   Appends a relationship paragraph to FROM-ID: BEFORE then `[[id:TO-ID][LABEL]]`
   then AFTER. **The core act for linking notes that already exist.** Link sits
   between BEFORE/AFTER so phrasing + punctuation are honest (AFTER `"."` for a
   full stop). One-directional — backlinks give the reverse. **Does NOT dedupe:
   this skill must check for an existing link before calling it.**
-- `(sns-roam-set-body ID NEW-BODY)` → `(:id :file)`. NEW-BODY is a **string** of
+- `(sns-roam-set-body ID NEW-BODY)` → `(:id :file :diff)`. NEW-BODY is a **string** of
   org prose (drawer + `#+title` preserved). Replaces only the text before the
   first heading; existing `* ` headings and their content stay. Use when
   rewriting a note that has no headings (e.g. a sparse fleeting note). It
   cannot change a heading: tell the owner to edit that section by hand.
-- `(sns-roam-replace-element ID PRED NEW-ELEMENT)` → `(:id :file)`. **Transform:**
+- `(sns-roam-replace-element ID PRED NEW-ELEMENT)` → `(:id :file :diff)`. **Transform:**
   replaces the single body element matching PRED (a unary org-ml-node predicate)
   with NEW-ELEMENT (a built org-ml node). Asserts exactly one match — loud error
   on zero or many, so an ambiguous edit never hits the wrong element. Use to
   rewrite one paragraph/claim in place without reproducing the rest of the body.
   Reaches only the text before the first heading.
-- `(sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER)` → `(:id :file)`.
+- `(sns-roam-insert-element ID PRED NEW-ELEMENT &optional AFTER)` → `(:id :file :diff)`.
   Adds NEW-ELEMENT, a paragraph built with `org-ml-build-paragraph`, before
   the single body element matching PRED, or after it when AFTER is non-nil.
   PRED sees only body elements, never the drawer or `#+` lines. Every other
@@ -277,6 +283,8 @@ Write:
   only the text before the first heading.
 - `(sns-roam-set-property ID KEY VALUE)` (drawer, e.g. `KIND`), `(sns-roam-set-keyword ID KEY VALUE)` (`#+` line, e.g. `TITLE`),
   `(sns-roam-rename ID NEW-TITLE)` → for curation flows (promote, retitle).
+  The first two return `(:id :file :diff)`; `rename` returns
+  `(:id :title :file :diff)`, where `:diff` is the `#+title:` change.
 
 All body mutations flow through one shared boundary (`sns-roam--update-section`):
 a pure `(section -> section)` transform in, reconciled file out. You compose
@@ -403,7 +411,9 @@ When a connection between two existing notes surfaces — during a draft, a
    punctuation (`"."`).
 4. **SHOW** the proposed sentence and the direction (FROM → TO); confirm.
 5. **APPLY** `append-link`; then `org-roam-db-sync`.
-6. **VERIFY** `expand` FROM-ID shows TO-ID as a neighbour; report.
+6. **VERIFY** `expand` FROM-ID shows TO-ID as a neighbour. Show the user the
+   `:diff` that `append-link` returned, or say "no change" if it is `""`;
+   report.
 
 Direction matters: link FROM the note that *makes the claim about* the
 relationship. Backlinks make the reverse discoverable; don't add both.
@@ -448,7 +458,8 @@ to edit the section by hand.
 5. **APPLY**; then `org-roam-db-sync`.
 6. **VERIFY** the file reads correctly and any links the note had still
    resolve (`expand` shows the same forward neighbours, unless intentionally
-   changed).
+   changed). Show the user the `:diff` the edit returned, so a lost or
+   changed line is visible at once, or say "no change" if it is `""`.
 
 Predicate discipline: `replace-element` matches exactly one element or errors.
 Write the predicate narrowly (match on distinctive text in the target

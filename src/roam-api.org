@@ -584,7 +584,8 @@ file-level metadata.
   - =KEY= (string) — property name, without colons (e.g. =KIND=,
     not =:KIND:=).
   - =VALUE= (string) — property value.
-- *Output*: =t= on success. Errors loudly otherwise.
+- *Output*: =(:id :file :diff)=, with =:diff= as "Show what an edit
+  changed" describes. Errors loudly otherwise.
 - *Side effect*: rewrites the file on disk. The mutation is
   idempotent — calling twice with the same value is a no-op
   (writes the same bytes).
@@ -665,7 +666,8 @@ write boundary adds the note's :id and :file.  Pure."
   "Set property KEY to VALUE in the top-level drawer of roam node ID.
 
 ID is a roam UUID; KEY is the bare property name (no colons);
-VALUE is a string. Returns t on success. Errors if the node is
+VALUE is a string. Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors if the node is
 unknown, or if the file has no top-level section/drawer to
 update (which would mean it isn't a well-formed roam file).
 Composes through `sns-roam--update-section', so only the drawer is
@@ -673,8 +675,7 @@ written and every other element keeps its text."
   (sns-roam--update-section
    'sns-roam-set-property id
    (lambda (section)
-     (sns-roam--set-property-in-section section key value)))
-  t)
+     (sns-roam--set-property-in-section section key value))))
 #+end_src
 
 ** Discipline notes
@@ -714,7 +715,8 @@ paragraph edits are a later primitive.
     Should *not* include the property drawer or =#+title:= line —
     those are preserved automatically. Trailing newline normalised
     (we ensure the file ends in exactly one =\n=).
-- *Output*: =(:id :file)=.
+- *Output*: =(:id :file :diff)=, with =:diff= the =diff -u= of the file
+  before and after, as "Show what an edit changed" describes.
 - *Side effect*: rewrites the file on disk.
 - *Discipline*: replaces the body elements before the first
   heading. There is no merge, no append. If you want to add to
@@ -808,28 +810,38 @@ before anything is written, so a refusal leaves the buffer as it was.
 OPERATION is the symbol of the public function that called, such as
 `sns-roam-insert-element'.  An `sns-roam-error' raised while the
 section is planned and checked gains :id, :file and :operation.
-Loud failure on unknown ID or malformed file. Returns (:id :file)."
+Loud failure on unknown ID or malformed file.  Returns (:id :file
+:diff), where :diff is `sns-roam--file-diff' of the note's widened
+text before the edit and after the save, \"\" when nothing changed."
   (let ((file (sns-roam--node-file-or-error id)))
     (with-current-buffer (find-file-noselect file)
-      (sns-roam--call-with-context
-       (list :id id :file file :operation operation)
-       (lambda ()
-         ;; The owner may have narrowed the note in Emacs.  Parse and
-         ;; edit all of it.  After a refusal, `save-restriction' gives
-         ;; their narrowing back.  After an edit, the narrowing comes
-         ;; from `sns-roam--narrowing-after'.  A marker cannot tell an
-         ;; edit that ends where the narrowing starts from one that
-         ;; starts there.
-         (let* ((narrowing    (when (buffer-narrowed-p)
-                                (cons (point-min) (point-max))))
-                (replacements (save-restriction
-                                (widen)
-                                (sns-roam--edit-section id file section-fn))))
-           (when narrowing
-             (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
-               (narrow-to-region (car bounds) (cdr bounds)))))))
-      (save-buffer)
-      (list :id id :file file))))
+      (let ((before (sns-roam--widened-text)))
+        (sns-roam--call-with-context
+         (list :id id :file file :operation operation)
+         (lambda ()
+           ;; The owner may have narrowed the note in Emacs.  Parse and
+           ;; edit all of it.  After a refusal, `save-restriction' gives
+           ;; their narrowing back.  After an edit, the narrowing comes
+           ;; from `sns-roam--narrowing-after'.  A marker cannot tell an
+           ;; edit that ends where the narrowing starts from one that
+           ;; starts there.
+           (let* ((narrowing    (when (buffer-narrowed-p)
+                                  (cons (point-min) (point-max))))
+                  (replacements (save-restriction
+                                  (widen)
+                                  (sns-roam--edit-section id file section-fn))))
+             (when narrowing
+               (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
+                 (narrow-to-region (car bounds) (cdr bounds)))))))
+        (save-buffer)
+        (list :id id :file file
+              :diff (sns-roam--file-diff file before (sns-roam--widened-text)))))))
+
+(defun sns-roam--widened-text ()
+  "Return all of the current buffer's text, ignoring any narrowing."
+  (save-restriction
+    (widen)
+    (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun sns-roam-set-body (id new-body)
   "Replace the body of roam node ID with NEW-BODY.
@@ -1146,6 +1158,75 @@ missing line break."
   grown or shrunk only by what the edit changed inside it (issue
   #12). A refused edit leaves the narrowing as it was.
 
+* Show what an edit changed
+
+Each primitive that edits an existing note returns =:diff=, a unified
+diff of the note's file before and after the edit (slice 24). On
+2026-11-10 =sns-roam-replace-element= replaced a two-line paragraph
+with a one-line one and returned success, and only a manual =diff=
+showed the lost line (issue #10). The diff shows such a loss at once.
+
+** Contract
+
+- *Input*: the note's file name, and its widened text before and after
+  the edit.
+- *Output*: the output of =diff -u=, whose two headers both name the
+  note's file. An edit that changes nothing gives =""=.
+- *Failure*: a =diff= exit status other than 0 or 1 raises
+  =sns-roam-diff-failure= with =:status=, =:output= and =:file=. A
+  missing =diff= program raises Emacs's own =file-missing=.
+- *Requires*: the system =diff=, which macOS and Linux have.
+
+** Implementation
+
+The texts go to two temporary files, because =diff= compares files.
+=--label= replaces each temporary file's name with the note's in the
+headers. The temporary files are deleted whether or not =diff= runs.
+
+#+begin_src emacs-lisp
+(sns-roam-define-error diff-failure "diff could not compare the note's text"
+  (status output &optional file))
+
+(defun sns-roam--diff-result (status output file)
+  "Return the diff that `diff -u' printed as OUTPUT and exited with STATUS.
+Status 0 means the texts are the same, so the diff is \"\".  Status 1
+means they differ, so the diff is OUTPUT.  Any other status, or a
+signal description string from `call-process', raises
+`sns-roam-diff-failure' naming FILE.  Pure."
+  (pcase status
+    (0 "")
+    (1 output)
+    (_ (sns-roam--signal-diff-failure status output file))))
+
+(defun sns-roam--file-diff (file before after)
+  "Return a unified diff of BEFORE and AFTER, two texts of FILE.
+Writes each text to a temporary file and runs the system `diff -u' on
+them, labelled with FILE so the headers name the note.  Deletes the
+temporary files afterwards.  See `sns-roam--diff-result' for what the
+exit status gives."
+  (let* ((coding-system-for-write 'utf-8-unix)
+         (coding-system-for-read  'utf-8-unix)
+         (before-file (make-temp-file "sns-roam-before-" nil ".org" before)))
+    (unwind-protect
+        (let ((after-file (make-temp-file "sns-roam-after-" nil ".org" after)))
+          (unwind-protect
+              (with-temp-buffer
+                (let ((status (call-process "diff" nil t nil "-u"
+                                            "--label" file "--label" file
+                                            before-file after-file)))
+                  (sns-roam--diff-result status (buffer-string) file)))
+            (delete-file after-file)))
+      (delete-file before-file))))
+#+end_src
+
+** Discipline notes
+
+- *After the write.* The diff is made once the note is saved, from the
+  buffer's widened text, so it shows what the file now holds. A refused
+  edit raises before the write and returns no diff.
+- *Not for new notes.* =sns-roam-create-node= has no file before, so it
+  returns no =:diff=.
+
 * Mutate: append a relationship link
 
 Append a link from one note to another — the core Zettelkasten act
@@ -1168,7 +1249,7 @@ reverse direction is discoverable without a second physical link.
     clause, or full stop). Lets the link sit anywhere in a sentence
     and keeps punctuation honest, rather than forcing the link to the
     end. Pass =""= for nothing after.
-- *Output*: =(:from :to :file)=.
+- *Output*: =(:from :to :file :diff)=.
 - *Side effect*: appends one paragraph to FROM-ID's body.
 - *Discipline*: existing content is untouched (additive only). Both
   endpoints validated before any mutation. The primitive is *dumb* —
@@ -1197,7 +1278,8 @@ then AFTER, and becomes the last body element, spaced as
 child. Existing content is untouched. One-directional; org-roam
 backlinks give the reverse.
 The primitive does NOT dedupe — call it once per intended link.
-Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
+Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file
+:diff), :diff as `sns-roam--update-section' gives it."
   (sns-roam--node-file-or-error to-id)  ; validate target exists, loud
   (let* ((link  (org-ml-build-link (concat "id:" to-id) label))
          ;; Drop empty BEFORE/AFTER so no empty secondary-strings sneak in.
@@ -1213,7 +1295,9 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
                                             (apply #'org-ml-build-paragraph parts)
                                             t))
                  section)))))
-    (list :from from-id :to to-id :file (plist-get res :file))))
+    (list :from from-id :to to-id
+          :file (plist-get res :file)
+          :diff (plist-get res :diff))))
 #+end_src
 
 ** Discipline notes
@@ -1307,7 +1391,7 @@ edit never silently hits the wrong place.
     match *exactly one* body element; zero or many is a loud error.
   - =NEW-ELEMENT= (org-ml node) — the replacement, built via
     =org-ml-build-*=.
-- *Output*: =(:id :file)=.
+- *Output*: =(:id :file :diff)=.
 - *Side effect*: replaces the matched element in FROM's body.
 - *Discipline*: unique-handle — never guesses among multiple matches.
   AST in, AST out; no string-munging. Replaces an element *whole*; it
@@ -1370,7 +1454,7 @@ dropped a line (issues #8 and #10).
     Its =:post-blank= is set by the call.
   - =AFTER= (optional): non-nil inserts after the anchor; nil
     inserts before it.
-- *Output*: =(:id :file)=.
+- *Output*: =(:id :file :diff)=.
 - *Side effect*: adds NEW-ELEMENT to the body of ID's file.
 - *Spacing*: no gap shrinks, because org ends some elements, such as
   footnote definitions, only at two blank lines. The element in front
@@ -1659,7 +1743,7 @@ generic — works for any single-valued section keyword.
     =#+= or trailing colon (so =TITLE=, not =#+title:=). Org's
     parser stores keyword keys uppercased; we follow that.
   - =VALUE= (string) — the new value.
-- *Output*: =t= on success.
+- *Output*: =(:id :file :diff)=.
 - *Side effect*: rewrites the file on disk.
 - *Discipline*:
   - If the keyword is already present, replaces its value.
@@ -1695,13 +1779,13 @@ Replaces existing keyword in place; appends if absent."
   "Set #+KEY: VALUE in the top-level section of roam node ID.
 
 KEY is the bare uppercase keyword name (e.g. \"TITLE\"); VALUE
-is a string. Returns t on success. Errors loudly on unknown ID
+is a string. Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors loudly on unknown ID
 or missing top-level section."
   (sns-roam--update-section
    'sns-roam-set-keyword id
    (lambda (section)
-     (sns-roam--upsert-keyword section key value)))
-  t)
+     (sns-roam--upsert-keyword section key value))))
 #+end_src
 
 Composed through =sns-roam--update-section=, so only the keyword's
@@ -1787,7 +1871,10 @@ fresh capture would have produced.
 - *Input*:
   - =ID= (string) — the roam UUID.
   - =NEW-TITLE= (string) — the new title.
-- *Output*: plist =(:id ID :title NEW-TITLE :file NEW-PATH)=.
+- *Output*: plist =(:id ID :title NEW-TITLE :file NEW-PATH :diff DIFF)=,
+  where DIFF is the =#+title:= change. When the new file name exists,
+  the new title stays written and =sns-roam-file-exists= is raised, so
+  no diff is returned.
 - *Side effects*: title rewritten in file; file renamed; any
   visiting buffer updated.
 - *Discipline*: not transactional. Title write happens first,
@@ -1804,14 +1891,17 @@ fresh capture would have produced.
   "Rewrite roam node ID's title to NEW-TITLE and rename its file to match.
 
 Slug derivation uses `org-roam-node-slug' for parity with the
-capture template. Returns a plist (:id :title :file)."
-  (sns-roam-set-keyword id "TITLE" new-title)
-  (let* ((node    (org-roam-node-from-id id))
-         (_       (unless node
-                    (sns-roam--signal-unknown-id id)))
-         (slug    (org-roam-node-slug node))
-         (new-path (sns-roam-rename-file id slug)))
-    (list :id id :title new-title :file new-path)))
+capture template. Returns a plist (:id :title :file :diff), where
+:diff is the title change `sns-roam-set-keyword' made, labelled with
+the file's name before the rename."
+  (let* ((title-write (sns-roam-set-keyword id "TITLE" new-title))
+         (node        (org-roam-node-from-id id))
+         (_           (unless node
+                        (sns-roam--signal-unknown-id id)))
+         (slug        (org-roam-node-slug node))
+         (new-path    (sns-roam-rename-file id slug)))
+    (list :id id :title new-title :file new-path
+          :diff (plist-get title-write :diff))))
 #+end_src
 
 * Mutate: create a new roam node

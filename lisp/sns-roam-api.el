@@ -395,7 +395,8 @@ write boundary adds the note's :id and :file.  Pure."
   "Set property KEY to VALUE in the top-level drawer of roam node ID.
 
 ID is a roam UUID; KEY is the bare property name (no colons);
-VALUE is a string. Returns t on success. Errors if the node is
+VALUE is a string. Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors if the node is
 unknown, or if the file has no top-level section/drawer to
 update (which would mean it isn't a well-formed roam file).
 Composes through `sns-roam--update-section', so only the drawer is
@@ -403,8 +404,7 @@ written and every other element keeps its text."
   (sns-roam--update-section
    'sns-roam-set-property id
    (lambda (section)
-     (sns-roam--set-property-in-section section key value)))
-  t)
+     (sns-roam--set-property-in-section section key value))))
 
 (defun sns-roam--section-header-p (element)
   "Non-nil if ELEMENT is roam header furniture (property-drawer or keyword)."
@@ -470,28 +470,38 @@ before anything is written, so a refusal leaves the buffer as it was.
 OPERATION is the symbol of the public function that called, such as
 `sns-roam-insert-element'.  An `sns-roam-error' raised while the
 section is planned and checked gains :id, :file and :operation.
-Loud failure on unknown ID or malformed file. Returns (:id :file)."
+Loud failure on unknown ID or malformed file.  Returns (:id :file
+:diff), where :diff is `sns-roam--file-diff' of the note's widened
+text before the edit and after the save, \"\" when nothing changed."
   (let ((file (sns-roam--node-file-or-error id)))
     (with-current-buffer (find-file-noselect file)
-      (sns-roam--call-with-context
-       (list :id id :file file :operation operation)
-       (lambda ()
-         ;; The owner may have narrowed the note in Emacs.  Parse and
-         ;; edit all of it.  After a refusal, `save-restriction' gives
-         ;; their narrowing back.  After an edit, the narrowing comes
-         ;; from `sns-roam--narrowing-after'.  A marker cannot tell an
-         ;; edit that ends where the narrowing starts from one that
-         ;; starts there.
-         (let* ((narrowing    (when (buffer-narrowed-p)
-                                (cons (point-min) (point-max))))
-                (replacements (save-restriction
-                                (widen)
-                                (sns-roam--edit-section id file section-fn))))
-           (when narrowing
-             (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
-               (narrow-to-region (car bounds) (cdr bounds)))))))
-      (save-buffer)
-      (list :id id :file file))))
+      (let ((before (sns-roam--widened-text)))
+        (sns-roam--call-with-context
+         (list :id id :file file :operation operation)
+         (lambda ()
+           ;; The owner may have narrowed the note in Emacs.  Parse and
+           ;; edit all of it.  After a refusal, `save-restriction' gives
+           ;; their narrowing back.  After an edit, the narrowing comes
+           ;; from `sns-roam--narrowing-after'.  A marker cannot tell an
+           ;; edit that ends where the narrowing starts from one that
+           ;; starts there.
+           (let* ((narrowing    (when (buffer-narrowed-p)
+                                  (cons (point-min) (point-max))))
+                  (replacements (save-restriction
+                                  (widen)
+                                  (sns-roam--edit-section id file section-fn))))
+             (when narrowing
+               (let ((bounds (sns-roam--narrowing-after narrowing replacements)))
+                 (narrow-to-region (car bounds) (cdr bounds)))))))
+        (save-buffer)
+        (list :id id :file file
+              :diff (sns-roam--file-diff file before (sns-roam--widened-text)))))))
+
+(defun sns-roam--widened-text ()
+  "Return all of the current buffer's text, ignoring any narrowing."
+  (save-restriction
+    (widen)
+    (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun sns-roam-set-body (id new-body)
   "Replace the body of roam node ID with NEW-BODY.
@@ -720,6 +730,40 @@ missing line break."
       (unless (equal planned actual)
         (sns-roam--signal-reparse-mismatch planned actual file)))))
 
+(sns-roam-define-error diff-failure "diff could not compare the note's text"
+  (status output &optional file))
+
+(defun sns-roam--diff-result (status output file)
+  "Return the diff that `diff -u' printed as OUTPUT and exited with STATUS.
+Status 0 means the texts are the same, so the diff is \"\".  Status 1
+means they differ, so the diff is OUTPUT.  Any other status, or a
+signal description string from `call-process', raises
+`sns-roam-diff-failure' naming FILE.  Pure."
+  (pcase status
+    (0 "")
+    (1 output)
+    (_ (sns-roam--signal-diff-failure status output file))))
+
+(defun sns-roam--file-diff (file before after)
+  "Return a unified diff of BEFORE and AFTER, two texts of FILE.
+Writes each text to a temporary file and runs the system `diff -u' on
+them, labelled with FILE so the headers name the note.  Deletes the
+temporary files afterwards.  See `sns-roam--diff-result' for what the
+exit status gives."
+  (let* ((coding-system-for-write 'utf-8-unix)
+         (coding-system-for-read  'utf-8-unix)
+         (before-file (make-temp-file "sns-roam-before-" nil ".org" before)))
+    (unwind-protect
+        (let ((after-file (make-temp-file "sns-roam-after-" nil ".org" after)))
+          (unwind-protect
+              (with-temp-buffer
+                (let ((status (call-process "diff" nil t nil "-u"
+                                            "--label" file "--label" file
+                                            before-file after-file)))
+                  (sns-roam--diff-result status (buffer-string) file)))
+            (delete-file after-file)))
+      (delete-file before-file))))
+
 (defun sns-roam-append-link (from-id to-id label before after)
   "Append a relationship paragraph to FROM-ID linking to TO-ID.
 The paragraph reads BEFORE then an inline [[id:TO-ID][LABEL]] link
@@ -728,7 +772,8 @@ then AFTER, and becomes the last body element, spaced as
 child. Existing content is untouched. One-directional; org-roam
 backlinks give the reverse.
 The primitive does NOT dedupe — call it once per intended link.
-Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
+Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file
+:diff), :diff as `sns-roam--update-section' gives it."
   (sns-roam--node-file-or-error to-id)  ; validate target exists, loud
   (let* ((link  (org-ml-build-link (concat "id:" to-id) label))
          ;; Drop empty BEFORE/AFTER so no empty secondary-strings sneak in.
@@ -744,7 +789,9 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
                                             (apply #'org-ml-build-paragraph parts)
                                             t))
                  section)))))
-    (list :from from-id :to to-id :file (plist-get res :file))))
+    (list :from from-id :to to-id
+          :file (plist-get res :file)
+          :diff (plist-get res :diff))))
 
 (defun sns-roam-body-elements (id)
   "Return the body elements before the first heading of roam node ID.
@@ -998,13 +1045,13 @@ Replaces existing keyword in place; appends if absent."
   "Set #+KEY: VALUE in the top-level section of roam node ID.
 
 KEY is the bare uppercase keyword name (e.g. \"TITLE\"); VALUE
-is a string. Returns t on success. Errors loudly on unknown ID
+is a string. Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors loudly on unknown ID
 or missing top-level section."
   (sns-roam--update-section
    'sns-roam-set-keyword id
    (lambda (section)
-     (sns-roam--upsert-keyword section key value)))
-  t)
+     (sns-roam--upsert-keyword section key value))))
 
 (defun sns-roam--split-roam-filename (path)
   "Return (PREFIX . SLUG) from a roam filename PATH.
@@ -1045,14 +1092,17 @@ or the destination already exists."
   "Rewrite roam node ID's title to NEW-TITLE and rename its file to match.
 
 Slug derivation uses `org-roam-node-slug' for parity with the
-capture template. Returns a plist (:id :title :file)."
-  (sns-roam-set-keyword id "TITLE" new-title)
-  (let* ((node    (org-roam-node-from-id id))
-         (_       (unless node
-                    (sns-roam--signal-unknown-id id)))
-         (slug    (org-roam-node-slug node))
-         (new-path (sns-roam-rename-file id slug)))
-    (list :id id :title new-title :file new-path)))
+capture template. Returns a plist (:id :title :file :diff), where
+:diff is the title change `sns-roam-set-keyword' made, labelled with
+the file's name before the rename."
+  (let* ((title-write (sns-roam-set-keyword id "TITLE" new-title))
+         (node        (org-roam-node-from-id id))
+         (_           (unless node
+                        (sns-roam--signal-unknown-id id)))
+         (slug        (org-roam-node-slug node))
+         (new-path    (sns-roam-rename-file id slug)))
+    (list :id id :title new-title :file new-path
+          :diff (plist-get title-write :diff))))
 
 (defun sns-roam--org-timestamp-of (time)
   "Return TIME as an inactive Org timestamp string,

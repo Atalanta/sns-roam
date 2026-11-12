@@ -146,8 +146,8 @@ The data must start with :kind, whose value is KIND.  When
     sns-roam-no-excerpt-container sns-roam-match-count
     sns-roam-unsupported-element sns-roam-history-layout sns-roam-bad-date
     sns-roam-reparse-mismatch sns-roam-file-exists sns-roam-id-conflict
-    sns-roam-index-failure)
-  "Every condition the bridge raises, as the slice 21 plan lists them.")
+    sns-roam-index-failure sns-roam-diff-failure)
+  "Every condition the bridge raises: the slice 21 list and slice 24's.")
 
 (ert-deftest sns-roam-every-condition-is-an-error-with-its-kind ()
   ;; A handler on `error' still catches each one, the data names it, and
@@ -741,7 +741,7 @@ with ID \"contract-id\".  Kills the note's buffer afterwards."
                    "contract-id"
                    (sns-roam-test--containing "2026-10-24")
                    (org-ml-build-paragraph "2026-11-11: signed a 2-year term."))))
-      (should (equal (list :id "contract-id" :file file) result))
+      (sns-roam-test--should-have result :id "contract-id" :file file)
       (should (equal (concat ":END:\n#+title: Vendor contract\n\n"
                              "Edition: Pro.\n\nOpen: renewal date.\n\n"
                              "2026-11-11: signed a 2-year term.\n\n"
@@ -1255,7 +1255,7 @@ to.  Kills every note buffer afterwards, under its old or new name."
   ;; The drawer is the element the edit changes, so org may print it in
   ;; its own form; every line after it keeps its text.
   (sns-roam-test--with-typed-note
-    (should (eq t (sns-roam-set-property "typed-id" "KIND" "permanent")))
+    (should (sns-roam-set-property "typed-id" "KIND" "permanent"))
     (let ((after (sns-roam-test--file-text file)))
       (should (string-match-p "^:KIND: +permanent$" after))
       (should (string-match-p "^:ID: +typed-id$" after))
@@ -1715,6 +1715,136 @@ element drops it whether or not the note is narrowed."
     (should (equal "A longer new top paragraph."
                    (with-current-buffer (get-file-buffer file)
                      (string-trim (buffer-string)))))))
+
+;;; --- each edit returns a diff of the note (slice 24) ---
+
+(defun sns-roam-test--diff-lines (diff)
+  "Return the lines DIFF removes and adds, as (:removed R :added A).
+DIFF is `diff -u' output.  Its `---' and `+++' headers and its `@@'
+hunk lines are left out, and each line loses its leading `-' or `+'."
+  (let ((lines (seq-remove (lambda (line)
+                             (string-match-p "\\`\\(?:---\\|\\+\\+\\+\\) " line))
+                           (split-string diff "\n"))))
+    (list :removed (mapcar (lambda (line) (substring line 1))
+                           (seq-filter (lambda (line) (string-prefix-p "-" line))
+                                       lines))
+          :added (mapcar (lambda (line) (substring line 1))
+                         (seq-filter (lambda (line) (string-prefix-p "+" line))
+                                     lines)))))
+
+(defun sns-roam-test--should-name-file (diff file)
+  "Show both headers of DIFF name FILE, not a temporary file."
+  (should (string-match-p (concat "^--- " (regexp-quote file) "$") diff))
+  (should (string-match-p (concat "^\\+\\+\\+ " (regexp-quote file) "$") diff)))
+
+(ert-deftest sns-roam-replace-element-diff-shows-a-lost-line ()
+  ;; S24.1.  On 2026-11-10 this edit dropped the second line, returned
+  ;; success, and only a manual diff showed it (issue #10).
+  (sns-roam-test--with-reference-note
+      "Open: renewal date.\nHistory, newest first:\n"
+    (let ((result (sns-roam-replace-element
+                   "contract-id"
+                   (sns-roam-test--containing "Open: renewal date.")
+                   (org-ml-build-paragraph "Open: renewal date."))))
+      (sns-roam-test--should-have result :id "contract-id" :file file)
+      (should (string-match-p "^-History, newest first:$"
+                              (plist-get result :diff)))
+      (sns-roam-test--should-name-file (plist-get result :diff) file))))
+
+(ert-deftest sns-roam-set-property-to-its-value-gives-an-empty-diff ()
+  ;; S24.2.
+  (sns-roam-test--with-reference-note "Open: renewal date.\n"
+    (sns-roam-test--should-have
+     (sns-roam-set-property "contract-id" "KIND" "reference")
+     :id "contract-id" :file file :diff "")))
+
+(ert-deftest sns-roam-diff-result-reports-a-diff-that-failed ()
+  ;; `diff' exits 2 on trouble, such as a file it cannot read.
+  (should (equal "" (sns-roam--diff-result 0 "" "note.org")))
+  (should (equal "+a\n" (sns-roam--diff-result 1 "+a\n" "note.org")))
+  (sns-roam-test--should-have
+   (sns-roam-test--error-data
+    'sns-roam-diff-failure
+    (lambda () (sns-roam--diff-result 2 "diff: missing" "note.org")))
+   :status 2 :output "diff: missing" :file "note.org"))
+
+(ert-deftest sns-roam-set-body-diff-shows-the-body-it-replaced ()
+  (sns-roam-test--with-typed-note
+    (let* ((result (sns-roam-set-body "typed-id" "New intro.\n\n"))
+           (diff (plist-get result :diff)))
+      (sns-roam-test--should-have result :id "typed-id" :file file)
+      (should (equal '(:removed ("Intro." "|a|b|" "" "+  item one" ""
+                                 "#+BEGIN_SRC sh" "echo hi" "#+END_SRC" "")
+                       :added ("New intro."))
+                     (sns-roam-test--diff-lines diff)))
+      (sns-roam-test--should-name-file diff file))))
+
+(ert-deftest sns-roam-replace-element-diff-shows-the-replaced-paragraph ()
+  (sns-roam-test--with-typed-note
+    (let ((result (sns-roam-replace-element
+                   "typed-id"
+                   (lambda (node) (equal "Intro." (org-ml-to-trimmed-string node)))
+                   (org-ml-build-paragraph :post-blank 1 "New intro."))))
+      (sns-roam-test--should-have result :id "typed-id" :file file)
+      (should (equal '(:removed ("Intro.") :added ("New intro."))
+                     (sns-roam-test--diff-lines (plist-get result :diff)))))))
+
+(ert-deftest sns-roam-insert-element-diff-shows-the-new-paragraph ()
+  (sns-roam-test--with-typed-note
+    (let ((result (sns-roam-insert-element "typed-id"
+                                           (sns-roam-test--containing "Intro.")
+                                           (org-ml-build-paragraph "Added.")
+                                           t)))
+      (sns-roam-test--should-have result :id "typed-id" :file file)
+      (should (equal '(:removed () :added ("Added." ""))
+                     (sns-roam-test--diff-lines (plist-get result :diff)))))))
+
+(ert-deftest sns-roam-append-link-diff-shows-the-link-paragraph ()
+  (sns-roam-test--with-typed-note
+    (let ((result (sns-roam-append-link "typed-id" "other-id" "Other" "See " ".")))
+      (sns-roam-test--should-have result :from "typed-id" :to "other-id" :file file)
+      (should (equal '(:removed () :added ("See [[id:other-id][Other]]." ""))
+                     (sns-roam-test--diff-lines (plist-get result :diff)))))))
+
+(ert-deftest sns-roam-set-property-diff-shows-the-changed-drawer-line ()
+  (sns-roam-test--with-typed-note
+    (let* ((result (sns-roam-set-property "typed-id" "KIND" "permanent"))
+           (changed (sns-roam-test--diff-lines (plist-get result :diff))))
+      (sns-roam-test--should-have result :id "typed-id" :file file)
+      ;; Org prints the whole drawer in its own form, so `:ID:' may
+      ;; change its spacing too; every changed line is a drawer line.
+      (should (seq-some (apply-partially #'string-match-p "\\`:KIND: +fleeting\\'")
+                        (plist-get changed :removed)))
+      (should (seq-some (apply-partially #'string-match-p "\\`:KIND: +permanent\\'")
+                        (plist-get changed :added)))
+      (should (seq-every-p (apply-partially #'string-match-p "\\`:[A-Z]+: +")
+                           (append (plist-get changed :removed)
+                                   (plist-get changed :added)))))))
+
+(ert-deftest sns-roam-set-keyword-diff-shows-the-changed-keyword-line ()
+  (sns-roam-test--with-typed-note
+    (let ((result (sns-roam-set-keyword "typed-id" "TITLE" "Retitled note")))
+      (sns-roam-test--should-have result :id "typed-id" :file file)
+      (should (equal '(:removed ("#+title: Typed note")
+                       :added ("#+title: Retitled note"))
+                     (sns-roam-test--diff-lines (plist-get result :diff)))))))
+
+(ert-deftest sns-roam-rename-diff-shows-the-new-title-line ()
+  ;; The owner's Emacs runs the autosync mode, which records the new
+  ;; title on save; the slug of the new name is made from it.
+  (sns-roam-test--with-typed-note
+    (org-roam-db-autosync-mode 1)
+    (unwind-protect
+        (let ((result (sns-roam-rename "typed-id" "Renamed note")))
+          (sns-roam-test--should-have
+           result
+           :id "typed-id" :title "Renamed note"
+           :file (expand-file-name "20261111090000-renamed_note.org"
+                                   org-roam-directory))
+          (should (equal '(:removed ("#+title: Typed note")
+                           :added ("#+title: Renamed note"))
+                         (sns-roam-test--diff-lines (plist-get result :diff)))))
+      (org-roam-db-autosync-mode -1))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
