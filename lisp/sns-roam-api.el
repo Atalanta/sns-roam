@@ -1069,12 +1069,14 @@ or missing top-level section."
   "Return TAGS when org reads each one as a tag.
 Raises `sns-roam-bad-tag' with the first tag that is not a string
 matching `org-tag-re' in full.  Pure."
-  (when-let* ((bad-tag (seq-find (lambda (tag)
+  ;; Find the position, not the element: a nil tag is itself invalid,
+  ;; and `seq-find' would return it as if nothing had been found.
+  (when-let* ((bad (seq-position tags nil
+                                 (lambda (tag _)
                                    (not (and (stringp tag)
                                              (string-match-p sns-roam--whole-tag-regexp
-                                                             tag))))
-                                 tags)))
-    (sns-roam--signal-bad-tag bad-tag))
+                                                             tag)))))))
+    (sns-roam--signal-bad-tag (nth bad tags)))
   tags)
 
 (defun sns-roam--filetags-value (tags)

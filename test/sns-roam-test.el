@@ -2398,5 +2398,12 @@ write it."
                 (set-buffer-modified-p nil))
               (kill-buffer buffer))))))))
 
+(ert-deftest sns-roam-check-tags-refuses-a-nil-tag ()
+  ;; A nil among the tags is invalid, not a sign that every tag passed.
+  (let ((err (should-error (sns-roam--check-tags '("research" nil "tech-leadership"))
+                           :type 'sns-roam-bad-tag)))
+    (should (eq 'sns-roam-bad-tag (plist-get (cdr err) :kind)))
+    (should (null (plist-get (cdr err) :tag)))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
