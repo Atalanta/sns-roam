@@ -194,6 +194,10 @@ Substring match, case-insensitive. The =:PROPERTIES:= drawer
 and =#+title:= line are skipped so UUID/keyword noise doesn't
 match. Files without an =:ID:= property drawer (i.e. not a roam
 node) are skipped silently. Empty list on no match."
+  ;; An empty regexp matches without moving point, so the search loop
+  ;; in `sns-roam--search-file' would never end.
+  (when (string-blank-p query)
+    (sns-roam--signal-empty-query query))
   (let ((files (directory-files-recursively
                 org-roam-directory "\\.org\\'")))
     (cl-mapcan (lambda (f) (sns-roam--search-file f query)) files)))
@@ -1252,6 +1256,9 @@ or missing top-level section."
    'sns-roam-set-keyword id
    (lambda (section)
      (sns-roam--upsert-keyword section key value))))
+
+(sns-roam-define-error empty-query "the search query is empty"
+  (query))
 
 (sns-roam-define-error bad-tag "org would not read this as a tag"
   (tag))

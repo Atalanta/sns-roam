@@ -2197,7 +2197,8 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
   `((sns-roam-find-by-metadata
      :returns (:id :title :file :tags :aliases) :names () :inherits ())
     (sns-roam-body-search
-     :returns (:id :title :file :line :point :hit-text) :names () :inherits ())
+     :returns (:id :title :file :line :point :hit-text)
+     :names (sns-roam-empty-query) :inherits ())
     (sns-roam-expand
      :returns (:nodes :edges)
      :names (sns-roam-unknown-id sns-roam-missing-file) :inherits ())
@@ -2975,6 +2976,18 @@ Each block loses the indentation of its opening fence."
       (should (equal "20261111090000-renamed_note.org"
                      (file-name-nondirectory renamed)))
       (should-not (file-exists-p file)))))
+
+(ert-deftest sns-roam-body-search-refuses-an-empty-query ()
+  ;; An empty query matched at every position and never returned.
+  (sns-roam-test--with-roam-dir
+    (sns-roam-test--register
+     (expand-file-name "n.org" org-roam-directory)
+     ":PROPERTIES:\n:ID: n-id\n:END:\n#+title: N\nBody.\n")
+    (dolist (query '("" "   "))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data 'sns-roam-empty-query
+                                  (lambda () (sns-roam-body-search query)))
+       :query query))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
