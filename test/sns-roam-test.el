@@ -2693,7 +2693,7 @@ with paths made portable and each node as its signature.  Run inside
 roam-fetch writes it after three semicolons and roam-distill after two.")
 
 (defconst sns-roam-test--skill-fragments
-  '("(with-temp-file \"/tmp/<task>.out\""
+  '("(with-temp-file \"SESSION/<task>.out\""
     "(package-vc-install '(sns-roam-api :url \"https://github.com/Atalanta/sns-roam\"))"
     "(package-vc-install '(sns-roam-api :url \"https://github.com/Atalanta/sns-roam\"))")
   "First line of each elisp block in the skills that is not a script.
@@ -2745,10 +2745,10 @@ Each block loses the indentation of its opening fence."
            for index from 1
            do (let ((file (expand-file-name (format "script-%d.el" index)
                                             directory)))
-                ;; Each script writes its result under /tmp; this one
-                ;; writes it in the test's own directory.
+                ;; Each script writes its result under the session's directory,
+                ;; SESSION; this one writes it in the test's own directory.
                 (with-temp-file file
-                  (insert (string-replace "/tmp/" (file-name-as-directory directory)
+                  (insert (string-replace "SESSION/" (file-name-as-directory directory)
                                           script)))
                 (should-not
                  (string-match-p
