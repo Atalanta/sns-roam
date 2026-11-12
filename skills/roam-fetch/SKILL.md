@@ -2,7 +2,7 @@
 name: roam-fetch
 description: |
   Activates when the user asks what their org-roam slipbox knows about a
-  topic, person, or concept — "what do we know about X?", "any notes on
+  topic, person, or concept: "what do we know about X?", "any notes on
   Y?", "compare what's in roam about A vs B", "pull up my thinking on
   Z". Runs the four-stage read pipeline (find-by-metadata → body-search
   → expand → excerpt) over the `sns-roam-*` elisp primitives in the
@@ -29,10 +29,8 @@ allowed-tools: Bash, Read, Write
 
 **Do NOT activate for:**
 - Any mutation request ("rewrite this note", "add a note about X",
-  "merge these two") — hand off to `roam-distill`, or
+  "merge these two"): hand off to `roam-distill`, or
   decline and surface the user's intent
-
----
 
 ## Role
 
@@ -43,8 +41,6 @@ excerpts you collect. You do not loop within a stage. You do not mutate.
 
 The slipbox is a **graph**, not a pile of text. Treat it as such. Edges
 matter as much as bodies.
-
----
 
 ## Operating Mode: file-and-load idiom
 
@@ -76,8 +72,6 @@ ASCII-only (e.g. counting nodes, checking a status), bare
 `emacsclient -e` is fine. The bar for "fine" is low: when in doubt,
 file-and-load.
 
----
-
 ## Mental Model of the Slipbox
 
 <slipbox_model>
@@ -91,12 +85,12 @@ node per file. Every node has:
 - Optional body content (paragraphs, lists, headlines, links).
 
 **Node kinds (`:KIND:`):**
-- `permanent` — atomic notes that earn their place; satisfy the
+- `permanent`: atomic notes that earn their place; satisfy the
   atomic-notes heuristic. Treat as authoritative.
-- `imported` — markdown imported from elsewhere; **not yet curated**.
+- `imported`: markdown imported from elsewhere; **not yet curated**.
   May be raw, may not satisfy the atomic-notes heuristic. Useful as
   source material; treat with mild scepticism for synthesis.
-- `fleeting` — quick captures with shelf life; will be mined into
+- `fleeting`: quick captures with shelf life; will be mined into
   permanent notes or discarded. Useful as recent-thinking signal,
   not as authoritative source.
 - Other kinds may exist; treat unknown kinds as "respect the user's
@@ -110,10 +104,8 @@ node per file. Every node has:
   that don't yet resolve to an `id:`. These mean "a node should exist
   at slug X someday." They show up as forward-link AST elements but
   with `type = "fuzzy"`, not `"id"`. The expand primitive **excludes**
-  these — they don't participate in the graph until materialised.
+  these: they don't participate in the graph until materialised.
 </slipbox_model>
-
----
 
 ## The Read Primitives
 
@@ -121,7 +113,7 @@ All five are in `src/roam-api.org` in the sns-roam repository
 (literate source; tangles to `lisp/sns-roam-api.el`). All return plists. All carry
 provenance (`:id`, `:file`, `:point` where applicable).
 
-### 1. `(sns-roam-find-by-metadata QUERY)` — seed by metadata
+### 1. `(sns-roam-find-by-metadata QUERY)`: seed by metadata
 
 - **Input**: query string (case-insensitive substring).
 - **Output**: list of node plists `(:id :title :file :tags :aliases)`.
@@ -129,7 +121,7 @@ provenance (`:id`, `:file`, `:point` where applicable).
 - **When**: first stage when the query phrase is a likely title /
   alias / tag fragment. Cheap, recall-heavy, the right default.
 
-### 2. `(sns-roam-body-search QUERY)` — seed by body
+### 2. `(sns-roam-body-search QUERY)`: seed by body
 
 - **Input**: query string (case-insensitive substring).
 - **Output**: list of hit plists
@@ -142,7 +134,7 @@ provenance (`:id`, `:file`, `:point` where applicable).
   a **seed-finding fallback**, not a primary search. Once you have
   hits, exit text-land and re-key by `:id` for graph operations.
 
-### 3. `(sns-roam-expand ID)` — one-hop subgraph
+### 3. `(sns-roam-expand ID)`: one-hop subgraph
 
 - **Input**: a node UUID.
 - **Output**: subgraph plist `(:nodes (...) :edges (...))`.
@@ -152,24 +144,24 @@ provenance (`:id`, `:file`, `:point` where applicable).
     `(:source-id :target-id :direction :point :context)`.
     `:direction` is `:forward` or `:backward`. `:context` is the
     headline outline path of the link's location, or nil.
-- **Loud failure** if ID has no roam node — that's a bug upstream.
+- **Loud failure** if ID has no roam node. That's a bug upstream.
 - **When**: after seeding, expand each seed once. Dedupe candidates
   before going to excerpts. Only forward `id:` links are edges; fuzzy
   autovivification placeholders are excluded.
 
-### 4. `(sns-roam-excerpt ID POINT)` — mine the enclosing element
+### 4. `(sns-roam-excerpt ID POINT)`: mine the enclosing element
 
 - **Input**: a node UUID and a buffer point inside its file.
 - **Output**: excerpt plist
   `(:id :file :point :text :container-type :outline)`.
-  - `:text` — the smallest enclosing excerpt container (`paragraph`,
+  - `:text`: the smallest enclosing excerpt container (`paragraph`,
     `item`, `quote-block`, or `verse-block`), serialised.
-  - `:container-type` — the symbol naming the container's element type.
+  - `:container-type`: the symbol naming the container's element type.
     Lets you filter (e.g. mining quotes only).
-  - `:outline` — list of headline plists, root-to-leaf ancestry, each
+  - `:outline`: list of headline plists, root-to-leaf ancestry, each
     `(:level :raw-value :tags :todo-keyword)`. Empty list when POINT
     is in the leading section before any headline.
-- **Loud failure** if POINT has no enclosing excerpt container — that
+- **Loud failure** if POINT has no enclosing excerpt container. That
   means POINT landed in a headline title line, a property drawer, or
   somewhere structurally weird. Caller bug; surface it.
 - **When**: for a point before the first heading, which
@@ -195,8 +187,6 @@ provenance (`:id`, `:file`, `:point` where applicable).
   returned only the first paragraph, and the link two lines below it
   was never read (issue #1).
 
----
-
 ## The Pipeline
 
 <pipeline>
@@ -217,14 +207,14 @@ your synthesis. Don't loop within a stage.
 **A single call per stage** means: one elisp script that runs the
 stage's call(s) in batch, writes the result to `/tmp/<task>.out`, and
 returns. If you find yourself running `find-by-metadata` three times
-with different queries to "verify," stop — that's a synthesis
+with different queries to "verify," stop. That's a synthesis
 problem, not a pipeline problem.
 
 **Re-keying body hits to IDs:** `body-search` returns hits with `:id`
 already populated. Group by `:id` to dedupe; keep the `:point` of each
 hit so excerpt-mining works.
 
-**Expanding multiple seeds in one call:** the canonical shape is
+**Expanding multiple seeds in one call:** the canonical form is
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
@@ -245,8 +235,6 @@ its paragraph. Catch that one kind and no other: any other failure is
 a bug to report. The worked example below shows the script.
 </pipeline>
 
----
-
 ## Output Format
 
 <output_format>
@@ -262,8 +250,8 @@ Note references:
 - "Observability Signals" (9D73CEE9-91BE-4796-81BC-67FC092F6E9D)
 ```
 
-Title in quotes, full UUID in parens. Ordered roughly by how
-load-bearing each was for the answer.
+Title in quotes, full UUID in parens. Ordered roughly by how much
+the answer relied on each.
 
 **Do NOT** embed inline `[[id:...]]` links in the prose. They clutter
 the answer and bias toward quote-stitching over synthesis. The user
@@ -274,14 +262,12 @@ the meaning ("the user explicitly defines X as Y"). Most of the answer
 should be your synthesis in your own words.
 </output_format>
 
----
-
 ## Worked Example
 
 <example name="what-do-we-know-about-atomic-notes">
 **User:** "What do we know about atomic notes?"
 
-**Stage 1 — seed by metadata.**
+**Stage 1: seed by metadata.**
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
@@ -293,10 +279,10 @@ should be your synthesis in your own words.
 ```
 
 → two seeds: `Atomic Notes`, `Atomic Notes Heuristic`. Aliases include
-`zettelkasten`, `evergreen notes`, `note checklist`. Skip stage 2 —
+`zettelkasten`, `evergreen notes`, `note checklist`. Skip stage 2:
 metadata returned hits.
 
-**Stage 3 — expand both seeds.**
+**Stage 3: expand both seeds.**
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
@@ -312,7 +298,7 @@ metadata returned hits.
 (backward edge from the heuristic into the concept). `Atomic Notes`
 cites `Observability` (forward edge into the use-case).
 
-**Stage 4 — mine each link's point.**
+**Stage 4: mine each link's point.**
 
 ```elisp
 ;;; -*- lexical-binding: t; -*-
@@ -334,10 +320,10 @@ as an excerpt: the leading paragraph defining what an atomic note is.
 The concept's point is under `* Why`, so it comes back as that
 section, with the introduction tying atomic notes to observability.
 
-**Stage 5 — synthesise.**
+**Stage 5: synthesise.**
 
 > Atomic Notes are single-idea, self-contained, densely-linked
-> entries written in your own words — not copied from sources. The
+> entries written in your own words, not copied from sources. The
 > Atomic Notes Heuristic is the operational gate: a checklist that
 > decides whether a note qualifies for the slipbox, applied at merge
 > time. Notes that fail get revised or split. The concept ties to
@@ -350,8 +336,6 @@ section, with the introduction tying atomic notes to observability.
 > - "Atomic Notes Heuristic" (1ED2CABC-E384-44DC-90C8-379742EB8AFA)
 </example>
 
----
-
 ## Anti-Patterns (Do Not)
 
 <do_not>
@@ -359,7 +343,7 @@ section, with the introduction tying atomic notes to observability.
   echo will corrupt on the first wikilink containing `&` or an
   em-dash. The pattern is cheap; use it.
 - Do NOT loop within a stage. If `find-by-metadata` returned nothing
-  useful, fall through to body-search — don't try three more
+  useful, fall through to body-search. Don't try three more
   variations of the same query.
 - Do NOT text-grep the slipbox directly with shell tools. The
   primitives skip property drawers correctly, dedupe correctly, and
@@ -369,8 +353,8 @@ section, with the introduction tying atomic notes to observability.
   roam *API* (which reads its own DB internally) is the supported
   surface. Querying SQLite tables is the same mistake as hand-rolling
   an org parser.
-- Do NOT flatten subgraphs. The `(:nodes (...) :edges (...))` shape is
-  load-bearing — edges carry direction and context that "nodes related
+- Do NOT flatten subgraphs. Keep the `(:nodes (...) :edges (...))`
+  structure: edges carry direction and context that "nodes related
   to X" loses.
 - Do NOT embed `[[id:...]]` links in the prose answer. References go
   in the trailer.
@@ -384,8 +368,6 @@ section, with the introduction tying atomic notes to observability.
   a broader or related term, and wait.
 </do_not>
 
----
-
 ## Tone
 
 - **Synthesise, don't stitch.** The user wants an answer in your own
@@ -398,11 +380,9 @@ section, with the introduction tying atomic notes to observability.
 - **One pipeline run per question.** If the question naturally
   decomposes into two distinct sub-questions, run the pipeline once
   per sub-question and synthesise across them.
-- **Hand off cleanly on mutation intent.** "That's a write — hand off
+- **Hand off cleanly on mutation intent.** "That's a write: hand off
   to `roam-distill` (or do it yourself with the bridge primitives).
   Want me to draft what the distill call would look like?"
-
----
 
 ## Reference
 
@@ -410,8 +390,6 @@ section, with the introduction tying atomic notes to observability.
   <https://github.com/Atalanta/sns-roam> (literate; tangles to
   `lisp/sns-roam-api.el`).
 - **Slipbox location:** `org-roam-directory`, which the load step reports.
-
----
 
 ## Loading the API
 

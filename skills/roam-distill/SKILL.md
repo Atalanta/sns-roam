@@ -3,7 +3,7 @@ name: roam-distill
 description: |
   Activates at the end of a thinking or braindump session when the user
   wants to turn the thinking into durable, claim-shaped permanent notes in their
-  org-roam slipbox — "distill this", "capture these as atomic notes",
+  org-roam slipbox: "distill this", "capture these as atomic notes",
   "write this up into roam", "make permanent notes from this". Distills a
   transcript into claim-shaped atomic notes, finds existing neighbours via
   the read pipeline, links them, and writes via the `sns-roam-*` elisp
@@ -12,7 +12,7 @@ when_to_use: |
   User has done exploratory thinking (a conversation with Claude, or
   notes they paste) and wants the durable ideas captured in the slipbox as
   permanent notes. The unit of output is the claim-shaped atomic note.
-  Never auto-write — always show candidates, confirm per-note, then apply.
+  Never auto-write: always show candidates, confirm per-note, then apply.
 allowed-tools: Bash, Read, Write
 ---
 
@@ -25,9 +25,7 @@ allowed-tools: Bash, Read, Write
 - User asks to write up thinking as permanent notes in roam
 
 **Do NOT activate for:**
-- Read questions about the slipbox — use `roam-fetch`
-
----
+- Read questions about the slipbox: use `roam-fetch`
 
 ## Role
 
@@ -38,10 +36,8 @@ The discipline is **show → confirm → apply**: never write a file before
 the user has seen and approved the candidate notes.
 
 The slipbox is an **argument graph**, not a topic encyclopedia. The output
-unit is the **claim-shaped atomic note** — one falsifiable assertion per
+unit is the **claim-shaped atomic note**: one falsifiable assertion per
 note, densely linked.
-
----
 
 ## Operating Mode: file-and-load idiom
 
@@ -50,11 +46,9 @@ Roam content carries `[[wikilinks]]`, em-dashes, and `&` that corrupt on
 the `-e` wire. Write the script to `/tmp/<task>.el`, have it `prin1` its
 result into `/tmp/<task>.out` with `with-temp-file`, load it with
 `emacsclient -e '(load-file "/tmp/<task>.el")' >/dev/null`, then `cat` the
-`.out`. The `load-file` return value is swallowed — capture to a file, do
+`.out`. The `load-file` return value is swallowed. Capture to a file, do
 not rely on stdout.
 Every script starts with the line `;;; -*- lexical-binding: t; -*-`.
-
----
 
 ## Elisp discipline (non-negotiable)
 
@@ -68,11 +62,9 @@ All elisp written here follows these rules:
 - **Loud failure, unique-handle.** Wrap each write in `condition-case` and
   report per-note; never half-write silently.
 
----
-
 ## What "claim-shaped" means (the distillation contract)
 
-- **The title IS the claim** — a complete, falsifiable sentence you could
+- **The title IS the claim**: a complete, falsifiable sentence you could
   agree or disagree with. "Leadership happens through relationships", not
   "Leadership". If the title isn't an arguable assertion, it's topic-shaped
   → reject and reshape.
@@ -81,19 +73,17 @@ All elisp written here follows these rules:
   two distinct claims do not.)
 - **Title cap: ~7 words, 9 under protest.** A claim title must fit the top
   of a card. The cap is a forcing function for atomicity: if you can't say
-  it in ~7 words, it is usually two claims — split it. Existing permanent
+  it in ~7 words, it is usually two claims. Split it. Existing permanent
   claims run 6-12 words; treat the low end as the target and anything over
   9 as an atomicity smell to re-examine, not a length to accept. No
-  semicolons or "and"/"but"-joins in a title — those are two claims wearing
+  semicolons or "and"/"but"-joins in a title: those are two claims wearing
   one title.
-- **Body = the argument** — why the claim holds, its scope and limits.
+- **Body = the argument**: why the claim holds, its scope and limits.
   Not a description of a topic.
 - **Exclude the operational.** Tables, names, schedules, tooling choices,
-  logistics are reference material, not permanent claims — leave them out
+  logistics are reference material, not permanent claims. Leave them out
   (or, if the user wants them, capture as a `:KIND: reference` note, not
   `permanent`; see "Reference and person notes").
-
----
 
 ## The user's own conventions
 
@@ -107,8 +97,6 @@ convention can set:
 
 With no conventions, give every named person outside the user a
 person note, and ask the user when you are unsure.
-
----
 
 ## Reference and person notes
 
@@ -227,14 +215,12 @@ note file, and never place the line yourself or rewrite the body with
   organisations those are is one of the user's conventions (see "The
   user's own conventions").
 
----
-
 ## The primitives this skill composes
 
-Read (for finding link targets — reuse the `roam-fetch` pipeline):
-- `(sns-roam-find-by-metadata QUERY)` — seed existing notes by title/alias/tag.
-- `(sns-roam-body-search QUERY)` — seed by body text when metadata misses.
-- `(sns-roam-expand ID)` — one-hop subgraph to see a candidate's neighbourhood.
+Read (for finding link targets: reuse the `roam-fetch` pipeline):
+- `(sns-roam-find-by-metadata QUERY)`: seed existing notes by title/alias/tag.
+- `(sns-roam-body-search QUERY)`: seed by body text when metadata misses.
+- `(sns-roam-expand ID)`: one-hop subgraph to see a candidate's neighbourhood.
 - `(sns-roam-body-elements ID)` → `(:id :file :elements)`. The org-ml nodes
   before the note's first heading, without the drawer and `#+` lines, read
   from the buffer the next edit acts on, unsaved edits included. Writes
@@ -263,7 +249,7 @@ Write:
   Appends a relationship paragraph to FROM-ID: BEFORE then `[[id:TO-ID][LABEL]]`
   then AFTER. **The core act for linking notes that already exist.** Link sits
   between BEFORE/AFTER so phrasing + punctuation are honest (AFTER `"."` for a
-  full stop). One-directional — backlinks give the reverse. **Does NOT dedupe:
+  full stop). One-directional: backlinks give the reverse. **Does NOT dedupe:
   this skill must check for an existing link before calling it.**
 - `(sns-roam-set-body ID NEW-BODY)` → `(:id :file :diff)`. NEW-BODY is a **string** of
   org prose (drawer + `#+title` preserved). Replaces only the text before the
@@ -274,7 +260,7 @@ Write:
   that section by hand.
 - `(sns-roam-replace-element ID PRED NEW-ELEMENT)` → `(:id :file :diff)`. **Transform:**
   replaces the single body element matching PRED (a unary org-ml-node predicate)
-  with NEW-ELEMENT (a built org-ml node). Asserts exactly one match — loud error
+  with NEW-ELEMENT (a built org-ml node). Asserts exactly one match: loud error
   on zero or many, so an ambiguous edit never hits the wrong element. Use to
   rewrite one paragraph/claim in place without reproducing the rest of the body.
   Reaches only the text before the first heading.
@@ -322,24 +308,20 @@ prose sentence that states the *relationship* ("This refines [[...]] by…").
 
 **org-ml hazard:** when a
 transform touches a *parsed* note's children, map the child list whole and
-filter — never slice into header/body sublists and re-`append` parsed nodes,
+filter. Never slice into header/body sublists and re-`append` parsed nodes,
 or reconciliation dies with `number-or-marker-p`.
-
----
 
 ## Two flows
 
 This skill has two flows; pick by intent:
 
-- **Draft** — turn a session transcript into new claim notes (below).
-- **Link** — connect notes that already exist when you spot a connection
+- **Draft**: turn a session transcript into new claim notes (below).
+- **Link**: connect notes that already exist when you spot a connection
   (see "The link flow"). The core Zettelkasten act; value accretes here over
   time as much as in drafting.
 
 Both are show → confirm → apply. Both can run in one session (draft new notes,
 then link them to existing ones).
-
----
 
 ## The draft pipeline
 
@@ -349,20 +331,20 @@ One stage at a time. Show before write.
    Apply the contract above (atomicity split, exclude operational).
    **Enforce the title cap at this step:** reject any candidate whose title
    exceeds ~9 words or contains a semicolon / "and" / "but" / comma-join.
-   A title over the cap is an atomicity signal — split the candidate into
+   A title over the cap is an atomicity signal: split the candidate into
    separate claims and re-title, don't wave it through. Aim for the ~7-word
    target, not the 9-word ceiling.
 
 2. **Seed for neighbours.** For the cluster's key terms, run
    `find-by-metadata` (+ `body-search` on a miss) to find *existing* notes
    the new claims should link to. If empty, the cluster is greenfield and
-   will **self-link** — notes link to each other, isolated from the rest of
+   will **self-link**: notes link to each other, isolated from the rest of
    the slipbox until a future session links into it. This is normal.
 
 3. **Plan links.** Decide each note's links: to existing nodes (from step 2)
    and to siblings in this batch. Each link is a *relationship*, stated in
-   the linking sentence. (v1: plain `[[id:]]` links; typed relations —
-   supports/contradicts — are a later refinement.)
+   the linking sentence. (v1: plain `[[id:]]` links; typed relations,
+   supports/contradicts, are a later refinement.)
 
 4. **Mint IDs.** Pre-generate a UUID per new note (`org-id-new`). **This is
    the core technique:** intra-cluster links need the target's ID before the
@@ -387,16 +369,12 @@ One stage at a time. Show before write.
    `find-by-metadata` finds the cluster, and `expand` on the hub note shows
    the expected edge count. Report created files to the user to eyeball.
 
----
-
 ## Recovery
 
-New notes are safe to delete — until a *later* session links into them,
+New notes are safe to delete. Until a *later* session links into them,
 nothing else references them. If a write batch is wrong, delete the files
 in the slipbox and re-run. There is no partial-graph corruption risk for a
 fresh cluster.
-
----
 
 ## Worked Example (the first real run, 2026-06-06)
 
@@ -405,7 +383,7 @@ User pasted a "One-to-One Operating Model" braindump.
 1. **Distill** → 6 claim-shaped notes (e.g. "A one-to-one is a leadership
    conversation, not a reporting mechanism"; "Leadership happens through
    relationships"). Excluded: the cadence table, specific names, Outlook/Org
-   tooling — reference, not claims.
+   tooling: reference, not claims.
 2. **Seed** → `find-by-metadata` over leadership/1:1/cadence terms returned
    nil. Greenfield cluster → self-link.
 3. **Plan** → "Leadership happens through relationships" became the hub;
@@ -418,17 +396,15 @@ User pasted a "One-to-One Operating Model" braindump.
    edges. Eyeballed two files: well-formed drawer + `#+title` + resolved
    `[[id:]]` links.
 
----
-
 ## The link flow (connect existing notes)
 
-When a connection between two existing notes surfaces — during a draft, a
-`roam-fetch`, or a conversation — make it explicit with `append-link`.
+When a connection between two existing notes surfaces (during a draft, a
+`roam-fetch`, or a conversation) make it explicit with `append-link`.
 
 1. **Resolve both endpoints.** Get FROM-ID and TO-ID (via `find-by-metadata`
    / `body-search`). Confirm they're the intended notes.
 2. **Check for an existing link.** `expand` FROM-ID; if TO-ID is already a
-   forward neighbour, the link exists — do not re-add (the primitive does not
+   forward neighbour, the link exists. Do not re-add (the primitive does not
    dedupe). Surface it and stop.
 3. **Phrase the relationship.** A link is a *statement*: decide BEFORE / LABEL
    / AFTER so the appended sentence reads as a claim about how the two notes
@@ -446,17 +422,15 @@ relationship. Backlinks make the reverse discoverable; don't add both.
 ### Worked example (first link, 2026-06-06)
 
 Connected "Leadership cadence should be tiered by relationship proximity"
-(FROM) → "Skip-level meetings are deferred by capacity, not by doubt" (TO) —
+(FROM) → "Skip-level meetings are deferred by capacity, not by doubt" (TO):
 a connection the original 1:1 cluster missed. BEFORE "The tiering principle
 also explains why ", LABEL the target's claim, AFTER ".". Verified: TO became
 a forward neighbour of FROM.
 
----
-
 ## The transform flow (rewrite part of a note)
 
-When a note's body needs changing — retighten a claim, fix a stale sentence,
-plain back flourish, promote a fleeting note — use `replace-element` for a
+When a note's body needs changing (retighten a claim, fix a stale sentence,
+plain back flourish, promote a fleeting note) use `replace-element` for a
 single element, or `set-body` to rewrite the text before the first heading.
 Neither reaches a heading or the content under one. To add a paragraph under a
 heading, use `add-under-heading`; for any other change there, tell the owner to
@@ -493,7 +467,7 @@ edit the section by hand.
      paragraph's AST). It goes after the heading's own text, before any child
      heading.
 3. **Build the replacement as AST.** Preserve any `[[id:]]` links the old
-   element carried unless the edit deliberately drops them — reproduce them in
+   element carried unless the edit deliberately drops them. Reproduce them in
    the new element.
 4. **SHOW** the before and after; confirm.
 5. **APPLY**; then `org-roam-db-sync`.
@@ -504,7 +478,7 @@ edit the section by hand.
 
 Predicate discipline: `replace-element` matches exactly one element or errors.
 Write the predicate narrowly (match on distinctive text in the target
-element), and if it matches zero or many, tighten it — do not fall back to
+element), and if it matches zero or many, tighten it. Do not fall back to
 `set-body` blindly, since that reproduces the text before the first heading and risks dropping
 content.
 
@@ -516,10 +490,8 @@ mechanically:
 2. `set-property` KIND → `permanent` (`KIND` lives in the property drawer;
    `set-keyword` would add a `#+kind:` line and leave the drawer unchanged).
 3. `rename` if the title isn't yet a claim.
-4. Link it into the graph (`append-link`) — a permanent note is not finished
+4. Link it into the graph (`append-link`): a permanent note is not finished
    until connected.
-
----
 
 ## Anti-Patterns (Do Not)
 
@@ -529,9 +501,9 @@ mechanically:
 - **Do NOT pack two claims into one note** to save files. Split.
 - **Do NOT build links by string-concatenating org markup.** Use
   `org-ml-build-link`; let the AST serialise.
-- **Do NOT forget to pre-mint IDs** before building bodies that cross-link —
+- **Do NOT forget to pre-mint IDs** before building bodies that cross-link:
   forward references can't resolve otherwise.
-- **Do NOT skip `org-roam-db-sync`** — the cluster is invisible to the graph
+- **Do NOT skip `org-roam-db-sync`**: the cluster is invisible to the graph
   until synced.
 - **Do NOT call `append-link` without checking for an existing link first.**
   The primitive does not dedupe; `expand` the FROM note and skip if TO is
@@ -539,7 +511,7 @@ mechanically:
 - **Do NOT add a reciprocal link.** One-directional only; backlinks cover the
   reverse. Two physical links is double-maintenance. Person notes are the
   exception; see "Reference and person notes".
-- **Do NOT slice-and-rejoin parsed org-ml node lists** in any transform — map
+- **Do NOT slice-and-rejoin parsed org-ml node lists** in any transform: map
   the child list whole, filter don't slice.
 - **Do NOT use `set-body` to change one element.** It replaces the text before
   the first heading, so you must reproduce everything you keep there and risk
@@ -548,7 +520,7 @@ mechanically:
   reach one. To add a paragraph under a heading, use `add-under-heading`; for
   any other change there, tell the owner to edit that section by hand.
 - **Do NOT write a loose `replace-element` predicate.** It must match exactly
-  one element. Match on distinctive text; on zero/many it errors — tighten it,
+  one element. Match on distinctive text; on zero/many it errors. Tighten it,
   don't work around it.
 - **Do NOT drop existing `[[id:]]` links when rewriting an element.** Reproduce
   them in the replacement AST unless the edit deliberately removes them.
@@ -563,8 +535,6 @@ mechanically:
 - **Do NOT paraphrase the user's ideas into claims they didn't make.** The
   claims are theirs; surface candidates and let them correct.
 
----
-
 ## Tone
 
 - Short, direct. Show the candidates; let the user steer.
@@ -573,16 +543,12 @@ mechanically:
   don't silently decide.
 - Report files and edge counts after writing so the user can eyeball.
 
----
-
 ## Reference
 
 - `src/roam-api.org` in <https://github.com/Atalanta/sns-roam>: the
   `sns-roam-*` primitives (literate source).
 - The `roam-fetch` skill: the read sibling; reuse its pipeline for the
   neighbour-finding step.
-
----
 
 ## Loading the API
 
