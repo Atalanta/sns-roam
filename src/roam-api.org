@@ -714,7 +714,9 @@ written and every other element keeps its text."
   call raises and adds none, so the error shows whatever left the file
   without one.
 - *Idempotent.* Setting =:KIND:= to =permanent= twice leaves the file
-  as the first call left it, so a retrofit script can run again.
+  as the first call left it, so a retrofit script can run again. Edits
+  the owner has not saved in the buffer are the exception: the save
+  writes them.
 - *One property per call.* Updates to several properties take several
   calls.
 
@@ -1654,9 +1656,10 @@ Returns (:id :file)."
 
 ** Discipline notes
 
-- *Unique-handle, loud failure.* Every error is raised inside the
-  transform, before =sns-roam--update-section= changes the buffer,
-  so nothing is saved.
+- *Unique-handle, loud failure.* Every error but
+  =sns-roam-diff-failure= is raised inside the transform, before
+  =sns-roam--update-section= changes the buffer, so nothing is saved.
+  =sns-roam-diff-failure= comes after the save.
 - *Additive.* No existing element changes text. Only the
   =:post-blank= of the element in front of the new paragraph can
   change, and only from 0 to 1.
@@ -1843,7 +1846,8 @@ that holds one value.
   - If it is absent, the call adds a new keyword as the section's last
     child, after any body elements before the first heading.
   - Idempotent: setting the same KEY and VALUE again leaves the file
-    as it was.
+    as it was, apart from edits the owner had not saved in the buffer,
+    which the save writes.
 
 ** Implementation
 

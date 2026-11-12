@@ -1906,7 +1906,8 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
      :names (sns-roam-unknown-id sns-roam-missing-file) :inherits ())
     (sns-roam-replace-element
      :returns (:id :file :diff)
-     :names (sns-roam-match-count) :inherits (,sns-roam-test--write-boundary))
+     :names (sns-roam-match-count sns-roam-diff-failure)
+     :inherits (,sns-roam-test--write-boundary))
     (sns-roam-insert-element
      :returns (:id :file :diff)
      :names (sns-roam-unsupported-element sns-roam-match-count
