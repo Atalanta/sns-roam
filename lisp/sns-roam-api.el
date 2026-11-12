@@ -1059,6 +1059,97 @@ or missing top-level section."
    (lambda (section)
      (sns-roam--upsert-keyword section key value))))
 
+(sns-roam-define-error bad-tag "org would not read this as a tag"
+  (tag))
+
+(defconst sns-roam--whole-tag-regexp (concat "\\`" org-tag-re "\\'")
+  "Match a string that is one whole org tag, as `org-tag-re' allows.")
+
+(defun sns-roam--check-tags (tags)
+  "Return TAGS when org reads each one as a tag.
+Raises `sns-roam-bad-tag' with the first tag that is not a string
+matching `org-tag-re' in full.  Pure."
+  (when-let* ((bad-tag (seq-find (lambda (tag)
+                                   (not (and (stringp tag)
+                                             (string-match-p sns-roam--whole-tag-regexp
+                                                             tag))))
+                                 tags)))
+    (sns-roam--signal-bad-tag bad-tag))
+  tags)
+
+(defun sns-roam--filetags-value (tags)
+  "Return the =#+filetags:= value for TAGS, a non-empty list: \":t1:t2:\".  Pure."
+  (concat ":" (string-join tags ":") ":"))
+
+(defun sns-roam--keyword-p (key element)
+  "Non-nil if ELEMENT is a keyword whose parsed key is KEY, such as \"TITLE\"."
+  (and (org-ml-is-type 'keyword element)
+       (string= key (org-ml-get-property :key element))))
+
+(defun sns-roam--set-filetags-in-section (section tags)
+  "Return SECTION with one FILETAGS keyword holding TAGS, right after TITLE.
+A FILETAGS keyword straight after the TITLE keyword keeps its place
+and takes the new value; every other FILETAGS keyword is dropped.
+With no such keyword, a new one follows TITLE and takes TITLE's blank
+lines.  With TAGS nil, the keyword after TITLE goes and TITLE takes
+its blank lines.  Maps over the full child list.  Raises
+`sns-roam-bad-tag' for a tag org would not read, and
+`sns-roam-malformed-note' when SECTION has no TITLE keyword.  Pure."
+  (sns-roam--check-tags tags)
+  (let* ((children (org-ml-get-children section))
+         (title (or (seq-find (apply-partially #'sns-roam--keyword-p "TITLE")
+                              children)
+                    (sns-roam--signal-malformed-note 'title nil nil "TITLE")))
+         (after-title (cadr (memq title children)))
+         (tags-under-title (and after-title
+                                (sns-roam--keyword-p "FILETAGS" after-title)
+                                after-title))
+         (title-blank-lines (org-ml-get-property :post-blank title)))
+    (sns-roam--map-children
+     (lambda (section-children)
+       (mapcan
+        (lambda (child)
+          (cond
+           ((eq child title)
+            (cond
+             ;; The line under the title is kept or removed in its own
+             ;; clause below; removing it hands its blank lines back.
+             (tags-under-title
+              (list (if tags
+                        child
+                      (org-ml-set-property
+                       :post-blank
+                       (+ title-blank-lines
+                          (org-ml-get-property :post-blank tags-under-title))
+                       child))))
+             (tags
+              (list (org-ml-set-property :post-blank 0 child)
+                    (org-ml-build-keyword "FILETAGS" (sns-roam--filetags-value tags)
+                                          :post-blank title-blank-lines)))
+             (t (list child))))
+           ((eq child tags-under-title)
+            (and tags
+                 (list (org-ml-set-property :value (sns-roam--filetags-value tags)
+                                            child))))
+           ((sns-roam--keyword-p "FILETAGS" child) nil)
+           (t (list child))))
+        section-children))
+     section)))
+
+(defun sns-roam-set-tags (id tags)
+  "Set the file tags of roam node ID to TAGS, a list of strings.
+
+Writes one #+filetags: :t1:t2: line directly under #+title: and
+removes any other #+filetags: line in the first section; with TAGS
+nil, removes the line.  Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors loudly, before anything is
+written, on a tag org would not read as a tag, on unknown ID, and on
+a note with no #+title: line."
+  (sns-roam--update-section
+   'sns-roam-set-tags id
+   (lambda (section)
+     (sns-roam--set-filetags-in-section section tags))))
+
 (defun sns-roam--split-roam-filename (path)
   "Return (PREFIX . SLUG) from a roam filename PATH.
 PREFIX is the 14-digit timestamp + dash; SLUG is the body
@@ -1159,7 +1250,7 @@ appears before the first headline, as `sns-roam-set-body' writes it."
                   (butlast elements))
           (last elements)))
 
-(defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source)
+(defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source tags)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
 Slugifies TITLE for the filename, writes the file under
@@ -1176,11 +1267,15 @@ same time value. SLUG-SOURCE, if non-nil, is slugified for the
 filename in place of TITLE — use it to decouple the filename slug
 from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
+TAGS, if non-nil, is a list of strings written as one
+#+filetags: :t1:t2: line directly under #+title.
 Indexes the new file in the org-roam database, so the edit
 primitives can resolve the returned ID at once.
-Returns (:id :title :file). Errors before writing anything if the
-destination exists or the database holds ID for another file.
+Returns (:id :title :file). Errors before writing anything if a
+tag is not one org reads as a tag, if the destination exists, or
+if the database holds ID for another file.
 Errors after indexing if ID does not resolve to the new file."
+  (sns-roam--check-tags tags)
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
@@ -1190,6 +1285,9 @@ Errors after indexing if ID does not resolve to the new file."
          (props    (sns-roam--build-header-properties id created kind aliases))
          (drawer   (apply #'org-ml-build-property-drawer props))
          (kw       (org-ml-build-keyword "title" title))
+         (tags-kw  (and tags
+                        (list (org-ml-build-keyword "filetags"
+                                                    (sns-roam--filetags-value tags)))))
          ;; Split ELEMENTS into the leading paragraph-ish section
          ;; children (which co-exist with drawer + keyword in a single
          ;; section) and the trailing headlines (which sit as siblings).
@@ -1201,7 +1299,7 @@ Errors after indexing if ID does not resolve to the new file."
                             (cl-subseq elements 0 split-pos)))
          (sibling-headlines (cl-subseq elements split-pos))
          (section  (apply #'org-ml-build-section
-                          (append (list drawer kw) section-children)))
+                          (append (list drawer kw) tags-kw section-children)))
          (content  (mapconcat #'org-ml-to-string
                               (cons section sibling-headlines)
                               "")))

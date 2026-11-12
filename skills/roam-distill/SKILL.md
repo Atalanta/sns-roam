@@ -247,10 +247,13 @@ Read (for finding link targets — reuse the `roam-fetch` pipeline):
   history line".
 
 Write:
-- `(sns-roam-create-node TITLE KIND &optional ELEMENTS ID ALIASES CREATED-TIME)`
+- `(sns-roam-create-node TITLE KIND &optional ELEMENTS ID ALIASES CREATED-TIME SLUG-SOURCE TAGS)`
   → `(:id :title :file)`. **ELEMENTS is a list of org-ml AST nodes** (the
   body). KIND is `"permanent"` for claims. Pass ID to use a pre-minted UUID.
-  Errors if the destination file already exists.
+  TAGS, a list of strings, goes on one `#+filetags:` line under `#+title:`,
+  so a new tagged note needs no second write. Errors if the destination file
+  already exists, or if a tag is not one org reads as a tag (see
+  `set-tags`); then no file is written.
 - Each primitive below that edits an existing note returns `:diff`: the
   `diff -u` of the note's file before and after the edit, with both headers
   naming the file. `""` means the note did not change. A refused edit raises
@@ -281,6 +284,14 @@ Write:
   read back as the planned elements is a loud `sns-roam:` error, and the
   file is unchanged. Use to add a history line to a reference note. Reaches
   only the text before the first heading.
+- `(sns-roam-set-tags ID TAGS)` → `(:id :file :diff)`. **The way to tag a
+  note.** Sets the full tag list: TAGS is a list of strings, written as one
+  `#+filetags: :t1:t2:` line directly under `#+title:`; any other
+  `#+filetags:` line is removed, and `()` removes the tags. Each tag must
+  match org's `[[:alnum:]_@#%]+` in full, so `tech_leadership` is a tag and
+  `tech-leadership` is not. A bad tag raises `sns-roam-bad-tag` with `:tag`
+  and the file is unchanged: tell the owner which tag was refused. Do not tag
+  through `set-keyword`, which puts a new `#+filetags:` line after the body.
 - `(sns-roam-set-property ID KEY VALUE)` (drawer, e.g. `KIND`), `(sns-roam-set-keyword ID KEY VALUE)` (`#+` line, e.g. `TITLE`),
   `(sns-roam-rename ID NEW-TITLE)` → for curation flows (promote, retitle).
   The first two return `(:id :file :diff)`; `rename` returns

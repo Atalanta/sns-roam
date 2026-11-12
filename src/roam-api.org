@@ -1891,6 +1891,141 @@ Composed through =sns-roam--update-section=, so only the keyword's
 line is written. =sns-roam-rename= calls this, and a rename changes
 the =#+title:= line and the file name, and nothing else in the file.
 
+* Mutate: set a note's tags
+
+Set the full list of a note's file tags. They go on one
+=#+filetags: :t1:t2:= line directly under =#+title:=, where a reader
+looks for them. =sns-roam-set-keyword= with =FILETAGS= adds a missing
+line after the body, and this call moves such a line under the title
+(issue #19). org-roam reads the tags from that line, so
+=sns-roam-find-by-metadata= finds the note by them.
+
+** Contract
+
+- *Input*:
+  - =ID= (string): the roam node UUID.
+  - =TAGS= (list of strings): every tag the note should have, in
+    order. Each must match org's =org-tag-re=, =[[:alnum:]_@#%]+=, in
+    full. An empty list removes the tags.
+- *Output*: =(:id :file :diff)=.
+- *Side effect*: saves the file.
+- *Errors*: those of the write boundary, =sns-roam--update-section=,
+  and:
+  - =sns-roam-bad-tag= with =:tag=, the first tag org would not read
+    as a tag. The call raises before anything is written.
+  - =sns-roam-malformed-note= with =:missing title= and =:key TITLE=
+    when the first section has no =#+title:= line to put the tags
+    under.
+- *Discipline*:
+  - Sets the full list. Adding or removing one tag is the caller's
+    list to build.
+  - A =#+filetags:= line directly under the title has its value
+    replaced in place. Every other =#+filetags:= line in the first
+    section is removed, and when none sits under the title a new one
+    goes there.
+  - The new line takes the blank lines that followed the title, so the
+    title and the tags share no blank line and the body keeps its gap.
+  - With TAGS empty, the line under the title is removed and its blank
+    lines go back to the title.
+  - Idempotent: setting the same TAGS again leaves the file as it was,
+    apart from edits the owner had not saved in the buffer, which the
+    save writes.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(sns-roam-define-error bad-tag "org would not read this as a tag"
+  (tag))
+
+(defconst sns-roam--whole-tag-regexp (concat "\\`" org-tag-re "\\'")
+  "Match a string that is one whole org tag, as `org-tag-re' allows.")
+
+(defun sns-roam--check-tags (tags)
+  "Return TAGS when org reads each one as a tag.
+Raises `sns-roam-bad-tag' with the first tag that is not a string
+matching `org-tag-re' in full.  Pure."
+  (when-let* ((bad-tag (seq-find (lambda (tag)
+                                   (not (and (stringp tag)
+                                             (string-match-p sns-roam--whole-tag-regexp
+                                                             tag))))
+                                 tags)))
+    (sns-roam--signal-bad-tag bad-tag))
+  tags)
+
+(defun sns-roam--filetags-value (tags)
+  "Return the =#+filetags:= value for TAGS, a non-empty list: \":t1:t2:\".  Pure."
+  (concat ":" (string-join tags ":") ":"))
+
+(defun sns-roam--keyword-p (key element)
+  "Non-nil if ELEMENT is a keyword whose parsed key is KEY, such as \"TITLE\"."
+  (and (org-ml-is-type 'keyword element)
+       (string= key (org-ml-get-property :key element))))
+
+(defun sns-roam--set-filetags-in-section (section tags)
+  "Return SECTION with one FILETAGS keyword holding TAGS, right after TITLE.
+A FILETAGS keyword straight after the TITLE keyword keeps its place
+and takes the new value; every other FILETAGS keyword is dropped.
+With no such keyword, a new one follows TITLE and takes TITLE's blank
+lines.  With TAGS nil, the keyword after TITLE goes and TITLE takes
+its blank lines.  Maps over the full child list.  Raises
+`sns-roam-bad-tag' for a tag org would not read, and
+`sns-roam-malformed-note' when SECTION has no TITLE keyword.  Pure."
+  (sns-roam--check-tags tags)
+  (let* ((children (org-ml-get-children section))
+         (title (or (seq-find (apply-partially #'sns-roam--keyword-p "TITLE")
+                              children)
+                    (sns-roam--signal-malformed-note 'title nil nil "TITLE")))
+         (after-title (cadr (memq title children)))
+         (tags-under-title (and after-title
+                                (sns-roam--keyword-p "FILETAGS" after-title)
+                                after-title))
+         (title-blank-lines (org-ml-get-property :post-blank title)))
+    (sns-roam--map-children
+     (lambda (section-children)
+       (mapcan
+        (lambda (child)
+          (cond
+           ((eq child title)
+            (cond
+             ;; The line under the title is kept or removed in its own
+             ;; clause below; removing it hands its blank lines back.
+             (tags-under-title
+              (list (if tags
+                        child
+                      (org-ml-set-property
+                       :post-blank
+                       (+ title-blank-lines
+                          (org-ml-get-property :post-blank tags-under-title))
+                       child))))
+             (tags
+              (list (org-ml-set-property :post-blank 0 child)
+                    (org-ml-build-keyword "FILETAGS" (sns-roam--filetags-value tags)
+                                          :post-blank title-blank-lines)))
+             (t (list child))))
+           ((eq child tags-under-title)
+            (and tags
+                 (list (org-ml-set-property :value (sns-roam--filetags-value tags)
+                                            child))))
+           ((sns-roam--keyword-p "FILETAGS" child) nil)
+           (t (list child))))
+        section-children))
+     section)))
+
+(defun sns-roam-set-tags (id tags)
+  "Set the file tags of roam node ID to TAGS, a list of strings.
+
+Writes one #+filetags: :t1:t2: line directly under #+title: and
+removes any other #+filetags: line in the first section; with TAGS
+nil, removes the line.  Returns (:id :file :diff), as
+`sns-roam--update-section' does.  Errors loudly, before anything is
+written, on a tag org would not read as a tag, on unknown ID, and on
+a note with no #+title: line."
+  (sns-roam--update-section
+   'sns-roam-set-tags id
+   (lambda (section)
+     (sns-roam--set-filetags-in-section section tags))))
+#+end_src
+
 * Mutate: rename a node's file on disk
 
 Rename the =.org= file of a roam node, keep its timestamp prefix, and
@@ -2044,6 +2179,10 @@ the bridge primitives.
   - =SLUG-SOURCE= (string, optional): slugified for the filename in
     place of TITLE. It keeps the file name plain when the title
     carries extra detail, such as an appended date.
+  - =TAGS= (list of strings, optional): written as one
+    =#+filetags: :t1:t2:= line directly under =#+title:= when
+    non-empty. Each tag must match org's =org-tag-re= in full, as for
+    =sns-roam-set-tags=.
 - *Output*: plist =(:id ID :title TITLE :file PATH)=, with no =:diff=.
 - *Side effects*:
   - The new file is written under =org-roam-directory= with
@@ -2056,6 +2195,8 @@ the bridge primitives.
     =org-roam-db-sync= first. The links the body holds show as
     backlinks on their targets at once.
 - *Errors*:
+  - =sns-roam-bad-tag= with =:tag=, the first of TAGS org would not
+    read as a tag. The call raises before it writes anything.
   - =sns-roam-file-exists= with =:id= and =:path= when the destination
     exists. The call raises before it writes or indexes anything, so
     the existing file and its rows stay as they were and no row
@@ -2131,7 +2272,7 @@ appears before the first headline, as `sns-roam-set-body' writes it."
                   (butlast elements))
           (last elements)))
 
-(defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source)
+(defun sns-roam-create-node (title kind &optional elements id aliases created-time slug-source tags)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
 Slugifies TITLE for the filename, writes the file under
@@ -2148,11 +2289,15 @@ same time value. SLUG-SOURCE, if non-nil, is slugified for the
 filename in place of TITLE — use it to decouple the filename slug
 from a title that carries extra detail (e.g. an appended date),
 so the file stays cleanly named while the title remains human.
+TAGS, if non-nil, is a list of strings written as one
+#+filetags: :t1:t2: line directly under #+title.
 Indexes the new file in the org-roam database, so the edit
 primitives can resolve the returned ID at once.
-Returns (:id :title :file). Errors before writing anything if the
-destination exists or the database holds ID for another file.
+Returns (:id :title :file). Errors before writing anything if a
+tag is not one org reads as a tag, if the destination exists, or
+if the database holds ID for another file.
 Errors after indexing if ID does not resolve to the new file."
+  (sns-roam--check-tags tags)
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify (or slug-source title)))
          (prefix   (sns-roam--filename-prefix-of created-time))
@@ -2162,6 +2307,9 @@ Errors after indexing if ID does not resolve to the new file."
          (props    (sns-roam--build-header-properties id created kind aliases))
          (drawer   (apply #'org-ml-build-property-drawer props))
          (kw       (org-ml-build-keyword "title" title))
+         (tags-kw  (and tags
+                        (list (org-ml-build-keyword "filetags"
+                                                    (sns-roam--filetags-value tags)))))
          ;; Split ELEMENTS into the leading paragraph-ish section
          ;; children (which co-exist with drawer + keyword in a single
          ;; section) and the trailing headlines (which sit as siblings).
@@ -2173,7 +2321,7 @@ Errors after indexing if ID does not resolve to the new file."
                             (cl-subseq elements 0 split-pos)))
          (sibling-headlines (cl-subseq elements split-pos))
          (section  (apply #'org-ml-build-section
-                          (append (list drawer kw) section-children)))
+                          (append (list drawer kw) tags-kw section-children)))
          (content  (mapconcat #'org-ml-to-string
                               (cons section sibling-headlines)
                               "")))

@@ -146,8 +146,8 @@ The data must start with :kind, whose value is KIND.  When
     sns-roam-no-excerpt-container sns-roam-match-count
     sns-roam-unsupported-element sns-roam-history-layout sns-roam-bad-date
     sns-roam-reparse-mismatch sns-roam-file-exists sns-roam-id-conflict
-    sns-roam-index-failure sns-roam-diff-failure)
-  "Every condition the bridge raises: the slice 21 list and slice 24's.")
+    sns-roam-index-failure sns-roam-diff-failure sns-roam-bad-tag)
+  "Every condition the bridge raises: the slice 21 list, slice 24's and slice 26's.")
 
 (ert-deftest sns-roam-every-condition-is-an-error-with-its-kind ()
   ;; A handler on `error' still catches each one, the data names it, and
@@ -1860,6 +1860,170 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
                          (sns-roam-test--diff-lines (plist-get result :diff)))))
       (org-roam-db-autosync-mode -1))))
 
+;;; --- tags under the title (slice 26) ---
+
+(defconst sns-roam-test--untagged-note
+  (concat ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Leading teams\n"
+          "First paragraph.\n\nSecond paragraph.\n")
+  "A note with a title and two paragraphs, and no tags.")
+
+(defun sns-roam-test--text-after-title (file)
+  "Return the text of FILE from the line after its #+title: line."
+  (let ((text (sns-roam-test--file-text file)))
+    (unless (string-match "^#\\+title: .*\n" text)
+      (error "sns-roam tests: %s has no #+title: line" file))
+    (substring text (match-end 0))))
+
+(ert-deftest sns-roam-set-tags-adds-only-the-line-under-the-title ()
+  ;; S26.1.  On 2026-11-12 the line went after the body (issue #19).
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (org-roam-db-autosync-mode 1)
+    (unwind-protect
+        (let ((result (sns-roam-set-tags "bare-id" '("tech_leadership"))))
+          (should (equal '(:removed () :added ("#+filetags: :tech_leadership:"))
+                         (sns-roam-test--changed-lines
+                          before (sns-roam-test--file-text file))))
+          (should (equal '(:removed () :added ("#+filetags: :tech_leadership:"))
+                         (sns-roam-test--diff-lines (plist-get result :diff))))
+          (should (equal (concat "#+filetags: :tech_leadership:\n"
+                                 "First paragraph.\n\nSecond paragraph.\n")
+                         (sns-roam-test--text-after-title file)))
+          ;; The roam-fetch seed stage finds the note by its new tag.
+          (should (equal '("bare-id")
+                         (mapcar (lambda (hit) (plist-get hit :id))
+                                 (sns-roam-find-by-metadata "tech_leadership")))))
+      (org-roam-db-autosync-mode -1))))
+
+(ert-deftest sns-roam-set-tags-moves-a-line-left-after-the-body ()
+  ;; S26.2.  `sns-roam-set-keyword' left the line after the body.  A
+  ;; moved line differs at both ends, so `sns-roam-test--changed-lines'
+  ;; would report the paragraphs between; the line diff shows the move.
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-set-keyword "bare-id" "FILETAGS" ":old:")
+    (let ((tagged-after-body (sns-roam-test--file-text file)))
+      (should (string-suffix-p "Second paragraph.\n#+filetags: :old:\n"
+                               tagged-after-body))
+      (let ((result (sns-roam-set-tags "bare-id" '("new"))))
+        (should (equal '(:removed ("#+filetags: :old:")
+                         :added ("#+filetags: :new:"))
+                       (sns-roam-test--diff-lines (plist-get result :diff))))
+        (should (equal (concat "#+filetags: :new:\n"
+                               "First paragraph.\n\nSecond paragraph.\n")
+                       (sns-roam-test--text-after-title file)))))))
+
+(ert-deftest sns-roam-set-tags-refuses-a-tag-org-does-not-read ()
+  ;; S26.3.  A hyphen is not in `org-tag-re', so org would not read
+  ;; `tech-leadership' as one tag.
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-bad-tag
+      (lambda () (sns-roam-set-tags "bare-id" '("tech-leadership"))))
+     :tag "tech-leadership" :id "bare-id" :operation 'sns-roam-set-tags)
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-set-tags-names-the-first-bad-tag-and-writes-nothing ()
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-bad-tag
+      (lambda () (sns-roam-set-tags "bare-id" '("research" "tech-leadership"))))
+     :tag "tech-leadership")
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-set-tags-writes-several-tags-on-one-line ()
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-set-tags "bare-id" '("a" "b_2"))
+    (should (equal (concat "#+filetags: :a:b_2:\n"
+                           "First paragraph.\n\nSecond paragraph.\n")
+                   (sns-roam-test--text-after-title file)))))
+
+(ert-deftest sns-roam-set-tags-twice-leaves-one-line ()
+  ;; The second call replaces the line under the title in place.
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-set-tags "bare-id" '("first"))
+    (let ((result (sns-roam-set-tags "bare-id" '("second"))))
+      (should (equal '(:removed ("#+filetags: :first:")
+                       :added ("#+filetags: :second:"))
+                     (sns-roam-test--diff-lines (plist-get result :diff)))))
+    (should (equal (concat "#+filetags: :second:\n"
+                           "First paragraph.\n\nSecond paragraph.\n")
+                   (sns-roam-test--text-after-title file)))
+    ;; The same tags again change nothing.
+    (should (equal "" (plist-get (sns-roam-set-tags "bare-id" '("second")) :diff)))))
+
+(ert-deftest sns-roam-set-tags-with-no-tags-removes-only-the-line ()
+  (sns-roam-test--with-bare-note sns-roam-test--untagged-note
+    (sns-roam-set-tags "bare-id" '("tech_leadership"))
+    (let ((tagged (sns-roam-test--file-text file))
+          (result (sns-roam-set-tags "bare-id" '())))
+      (should (equal '(:removed ("#+filetags: :tech_leadership:") :added ())
+                     (sns-roam-test--changed-lines
+                      tagged (sns-roam-test--file-text file))))
+      (should (equal '(:removed ("#+filetags: :tech_leadership:") :added ())
+                     (sns-roam-test--diff-lines (plist-get result :diff))))
+      (should (equal before (sns-roam-test--file-text file))))))
+
+(ert-deftest sns-roam-set-tags-keeps-the-gap-after-the-title ()
+  ;; The new line takes the title's blank line, so the title and the
+  ;; tags share no blank line and the body keeps its gap.
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Spaced\n\nBody.\n"
+    (sns-roam-set-tags "bare-id" '("a"))
+    (should (equal "#+filetags: :a:\n\nBody.\n"
+                   (sns-roam-test--text-after-title file)))
+    (sns-roam-set-tags "bare-id" '())
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-set-tags-refuses-a-note-with-no-title ()
+  (sns-roam-test--with-bare-note
+      ":PROPERTIES:\n:ID: bare-id\n:END:\nBody.\n"
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-malformed-note
+      (lambda () (sns-roam-set-tags "bare-id" '("a"))))
+     :missing 'title :key "TITLE" :id "bare-id")
+    (should (equal before (sns-roam-test--file-text file)))))
+
+(ert-deftest sns-roam-create-node-writes-tags-under-the-title ()
+  (sns-roam-test--with-roam-dir
+    (let ((file (plist-get (sns-roam-create-node
+                            "Leading teams" "permanent"
+                            (sns-roam--parse-body-elements "Body.\n")
+                            nil nil nil nil '("tech_leadership"))
+                           :file)))
+      (should (equal "#+filetags: :tech_leadership:\nBody.\n"
+                     (sns-roam-test--text-after-title file)))
+      (should (equal '("tech_leadership")
+                     (plist-get (car (sns-roam-find-by-metadata "tech_leadership"))
+                                :tags))))))
+
+(ert-deftest sns-roam-create-node-writes-several-tags-on-one-line ()
+  (sns-roam-test--with-roam-dir
+    (let ((file (plist-get (sns-roam-create-node "Lettered" "permanent" nil
+                                                 nil nil nil nil '("a" "b_2"))
+                           :file)))
+      (should (equal "#+filetags: :a:b_2:\n"
+                     (sns-roam-test--text-after-title file))))))
+
+(ert-deftest sns-roam-create-node-refuses-a-bad-tag-and-leaves-no-file ()
+  (sns-roam-test--with-roam-dir
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-bad-tag
+      (lambda () (sns-roam-create-node "Leading teams" "permanent" nil
+                                       nil nil nil nil '("tech-leadership"))))
+     :tag "tech-leadership")
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data
+      'sns-roam-bad-tag
+      (lambda () (sns-roam-create-node "Leading teams" "permanent" nil
+                                       nil nil nil nil
+                                       '("research" "tech-leadership"))))
+     :tag "tech-leadership")
+    (should (equal nil (sns-roam-test--org-files)))
+    (should (equal nil (org-roam-db-query [:select * :from nodes])))))
+
 ;;; --- each Contract against the code ---
 
 (defconst sns-roam-test--source-file
@@ -1923,6 +2087,10 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
     (sns-roam-set-keyword
      :returns (:id :file :diff)
      :names () :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-set-tags
+     :returns (:id :file :diff)
+     :names (sns-roam-bad-tag sns-roam-malformed-note)
+     :inherits (,sns-roam-test--write-boundary))
     (sns-roam-rename-file
      :returns path
      :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-malformed-note
@@ -1935,7 +2103,8 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
                 (sns-roam-rename-file . "those of =sns-roam-rename-file=")))
     (sns-roam-create-node
      :returns (:id :title :file)
-     :names (sns-roam-file-exists sns-roam-id-conflict sns-roam-index-failure)
+     :names (sns-roam-bad-tag sns-roam-file-exists sns-roam-id-conflict
+             sns-roam-index-failure)
      :inherits ())
     (sns-roam-meeting-note
      :returns (:id :title :file)
@@ -2179,6 +2348,8 @@ write it."
                     (sns-roam-set-property tide-id "KIND" "permanent"))
             (record 'sns-roam-set-keyword
                     (sns-roam-set-keyword tide-id "FILETAGS" ":sea:"))
+            (record 'sns-roam-set-tags
+                    (sns-roam-set-tags tide-id '("sea" "tides")))
             (record 'sns-roam-set-body
                     (sns-roam-set-body moon-id "The moon pulls the sea twice a day."))
             (record 'sns-roam-rename-file (sns-roam-rename-file moon-id "lunar_phases"))
