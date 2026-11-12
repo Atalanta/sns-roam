@@ -471,7 +471,12 @@ edit the section by hand.
    `:point` of the hit in this note whose `:hit-text` is the heading's line,
    and call `(sns-roam-subtree ID POINT)`. Show its `:text` as the before
    text, and take the outline path from the `:raw-value` of each entry in its
-   `:outline`. If `:elements` is nil and the change is not under a
+   `:outline`. `sns-roam-subtree` reads the saved file, but the edit acts on
+   the owner's Emacs buffer, so first check
+   `(let ((b (get-file-buffer FILE))) (and b (buffer-modified-p b)))` for
+   the note's `:file`. If it is non-nil, the owner has unsaved changes:
+   ask them to save the note, and stop until they have. If `:elements` is
+   nil and the change is not under a
    heading, tell the owner the note has no paragraphs before its first
    headline, and stop.
 2. **Choose the tool.**
