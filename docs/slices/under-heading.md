@@ -47,7 +47,7 @@ Scenario: S29.3 A path that names two headings is refused
 
 - New `sns-roam-add-under-heading ID OUTLINE-PATH NEW-ELEMENT` takes a path of heading titles such as `("Projects" "Tickets")` and a paragraph node, and returns `(:id :file :point :diff)`, `:point` being where the paragraph starts. It refuses a non-paragraph as `sns-roam-insert-element` does.
 - `sns-roam--update-section` (near line 993) works on the first section only: `sns-roam--edit-section` takes the parse's first child, and `sns-roam--check-edits` (near line 1316) compares the first section's children. Both need to target a chosen heading's own section instead, including one that is empty.
-- In `skills/roam-distill/SKILL.md`, the Write list gains the function, and the lines near 272, 448 and 519 that send heading edits to the owner say that adding a paragraph under a heading now goes through it.
+- In `skills/roam-distill/SKILL.md`, the Write list gains the function, and the lines near 272, 448 and 519 that send heading edits to the owner say that adding a paragraph under a heading now goes through it. The transform flow's step 1 reads a heading's section with `sns-roam-subtree`, at the point `sns-roam-body-search` gives for the heading's title, when the change is under a heading, instead of stopping at an empty `sns-roam-body-elements`.
 
 ## Questions to resolve
 
@@ -55,4 +55,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` has tests for S29.1, S29.2 and S29.3, comparing the file before and after with `sns-roam-test--changed-lines`, plus a heading with an empty section, a path that matches nothing, and a nested path `("Projects" "Tickets")`. The builder shows S29.1 on `main` impossible through the API, and runs S29.1 through `claude -p` against a separate Emacs server. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` has tests for S29.1, S29.2 and S29.3, comparing the file before and after with `sns-roam-test--changed-lines`, plus a heading with an empty section, a path that matches nothing, and a nested path `("Projects" "Tickets")`. A test forces a heading edit that would read back as merged paragraphs and shows it refused with `sns-roam-reparse-mismatch` and the file unchanged. The builder shows S29.1 on `main` impossible through the API, and runs S29.1 through `claude -p` against a separate Emacs server, on a note with no text before its first heading. `mise run check` and `mise run test` pass.
