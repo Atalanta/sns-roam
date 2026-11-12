@@ -146,8 +146,9 @@ The data must start with :kind, whose value is KIND.  When
     sns-roam-no-excerpt-container sns-roam-match-count
     sns-roam-unsupported-element sns-roam-history-layout sns-roam-bad-date
     sns-roam-reparse-mismatch sns-roam-file-exists sns-roam-id-conflict
-    sns-roam-index-failure sns-roam-diff-failure sns-roam-bad-tag)
-  "Every condition the bridge raises: the slice 21 list, slice 24's and slice 26's.")
+    sns-roam-index-failure sns-roam-diff-failure sns-roam-bad-tag
+    sns-roam-no-heading)
+  "Every condition the bridge raises: the slice 21 list, then slices 24, 26 and 28.")
 
 (ert-deftest sns-roam-every-condition-is-an-error-with-its-kind ()
   ;; A handler on `error' still catches each one, the data names it, and
@@ -1492,6 +1493,103 @@ TEXT has no final newline; see `sns-roam-test--with-bare-note'."
                                   (lambda () (sns-roam-excerpt "bare-id" point)))
        :id "bare-id" :point point :file file))))
 
+;;; --- sns-roam-subtree (slice 28) ---
+
+(defconst sns-roam-test--subtree-header
+  ":PROPERTIES:\n:ID: bare-id\n:END:\n#+title: Bare\nBefore any heading.\n"
+  "The start of each subtree fixture, with a paragraph before the first heading.")
+
+(defun sns-roam-test--position-of (text needle)
+  "Return the buffer position where NEEDLE starts in TEXT."
+  (1+ (string-search needle text)))
+
+(defun sns-roam-test--region (text from to)
+  "Return TEXT from the start of FROM up to the start of TO."
+  (substring text (string-search from text) (string-search to text)))
+
+(defun sns-roam-test--should-read-subtree (file before point heading next outline)
+  "Show that `sns-roam-subtree' at POINT in the bare note FILE reads one subtree.
+BEFORE is FILE's text.  The result's :text is the typed text from
+HEADING up to NEXT, the following heading, and holds nothing of NEXT;
+its :outline titles are OUTLINE."
+  (let ((result (sns-roam-subtree "bare-id" point)))
+    (sns-roam-test--should-have result :id "bare-id" :file file :point point)
+    (should (equal (sns-roam-test--region before heading next)
+                   (plist-get result :text)))
+    (should-not (string-search next (plist-get result :text)))
+    (should (equal outline
+                   (mapcar (lambda (headline) (plist-get headline :raw-value))
+                           (plist-get result :outline))))))
+
+(defconst sns-roam-test--dashboards-note
+  (concat sns-roam-test--subtree-header
+          "* Dashboards\nThe observability team owns these.\n\n"
+          "- Grafana\n  - production: [[https://grafana.example.com/d/prod][prod]]\n"
+          "* Next\nNot this one.\n")
+  "S28.1: a link under a heading, in a nested list, without the heading's word.")
+
+(ert-deftest sns-roam-subtree-at-a-heading-line-reads-its-section ()
+  (sns-roam-test--with-bare-note sns-roam-test--dashboards-note
+    (sns-roam-test--should-read-subtree
+     file before
+     (sns-roam-test--position-of before "Dashboards")
+     "* Dashboards" "* Next" '("Dashboards"))
+    (should (string-search "https://grafana.example.com/d/prod"
+                           (plist-get (sns-roam-subtree
+                                       "bare-id"
+                                       (sns-roam-test--position-of before "Dashboards"))
+                                      :text)))))
+
+(ert-deftest sns-roam-subtree-in-a-nested-list-reads-the-heading-over-it ()
+  (sns-roam-test--with-bare-note sns-roam-test--dashboards-note
+    (sns-roam-test--should-read-subtree
+     file before
+     (sns-roam-test--position-of before "production")
+     "* Dashboards" "* Next" '("Dashboards"))))
+
+(defconst sns-roam-test--projects-note
+  (concat sns-roam-test--subtree-header
+          "* Projects\nWhat the team works on.\n"
+          "** Tickets\nTicket triage happens on Mondays.\n"
+          "* Next\nNot this one.\n")
+  "S28.2: a section whose child heading holds the answer.")
+
+(ert-deftest sns-roam-subtree-includes-child-headings ()
+  (sns-roam-test--with-bare-note sns-roam-test--projects-note
+    (sns-roam-test--should-read-subtree
+     file before
+     (sns-roam-test--position-of before "What the team")
+     "* Projects" "* Next" '("Projects"))
+    (should (string-search "** Tickets\nTicket triage happens on Mondays.\n"
+                           (plist-get (sns-roam-subtree
+                                       "bare-id"
+                                       (sns-roam-test--position-of before "What the team"))
+                                      :text)))))
+
+(ert-deftest sns-roam-subtree-in-a-child-heading-reads-the-child ()
+  (sns-roam-test--with-bare-note sns-roam-test--projects-note
+    (sns-roam-test--should-read-subtree
+     file before
+     (sns-roam-test--position-of before "Ticket triage")
+     "** Tickets" "* Next" '("Projects" "Tickets"))))
+
+(ert-deftest sns-roam-subtree-before-the-first-heading-reports-no-heading ()
+  (sns-roam-test--with-bare-note sns-roam-test--projects-note
+    (let ((point (sns-roam-test--position-of before "Before any heading")))
+      (sns-roam-test--should-have
+       (sns-roam-test--error-data 'sns-roam-no-heading
+                                  (lambda () (sns-roam-subtree "bare-id" point)))
+       :point point :file file))))
+
+(ert-deftest sns-roam-subtree-leaves-the-file-unchanged ()
+  (sns-roam-test--with-bare-note sns-roam-test--dashboards-note
+    (let ((attributes (file-attribute-modification-time (file-attributes file))))
+      (sns-roam-subtree "bare-id" (sns-roam-test--position-of before "production"))
+      (should (equal before (sns-roam-test--file-text file)))
+      (should (equal attributes
+                     (file-attribute-modification-time (file-attributes file))))
+      (should-not (get-file-buffer file)))))
+
 (defconst sns-roam-test--headline-id-note
   "#+title: Headless\nIntro.\n* Heading\n:PROPERTIES:\n:ID: heading-id\n:END:\nUnder it.\n"
   "A note whose only ID is on a heading, so its first section has no drawer.")
@@ -2070,6 +2168,10 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
      :names (sns-roam-unknown-id sns-roam-missing-file
              sns-roam-no-excerpt-container)
      :inherits ())
+    (sns-roam-subtree
+     :returns (:id :file :point :text :outline)
+     :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-no-heading)
+     :inherits ())
     (sns-roam--update-section
      :opening "keeps this contract:$"
      :returns (:id :file :diff)
@@ -2346,6 +2448,15 @@ write it."
                                (car (sns-roam-body-search "high water")))))
               (record 'sns-roam-excerpt
                       (sns-roam-excerpt tide-id (plist-get hit :point))))
+            ;; `sns-roam-create-node' writes no headings, so this note is
+            ;; written directly.
+            (sns-roam-test--register
+             (expand-file-name "sea-states.org" org-roam-directory)
+             ":PROPERTIES:\n:ID: sea-id\n:END:\n#+title: Sea states\n* Calm\nNo waves.\n")
+            (record 'sns-roam-subtree
+                    (sns-roam-subtree
+                     "sea-id"
+                     (plist-get (car (sns-roam-body-search "No waves")) :point)))
             (record 'sns-roam-append-link
                     (sns-roam-append-link moon-id tide-id "tides" "It drives " "."))
             (record 'sns-roam-expand (sns-roam-expand tide-id))
@@ -2603,6 +2714,7 @@ Each block loses the indentation of its opening fence."
                      (cl-letf (((symbol-function 'sns-roam-find-by-metadata) #'ignore)
                                ((symbol-function 'sns-roam-expand) #'ignore)
                                ((symbol-function 'sns-roam-excerpt) #'ignore)
+                               ((symbol-function 'sns-roam-subtree) #'ignore)
                                ((symbol-function 'sns-roam-history-anchor) #'ignore)
                                ((symbol-function 'sns-roam-body-elements) #'ignore)
                                ((symbol-function 'sns-roam-insert-element) #'ignore))

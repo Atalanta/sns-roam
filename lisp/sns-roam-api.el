@@ -340,6 +340,41 @@ a property drawer — fix the upstream caller."
           :container-type  (org-ml-get-type container)
           :outline         outline)))
 
+(sns-roam-define-error no-heading "no heading encloses the point"
+  (point file))
+
+(defun sns-roam-subtree (id point)
+  "Return the subtree of the innermost heading over POINT in node ID's file.
+
+The result:
+  (:id ID
+   :file FILE
+   :point POINT
+   :text TEXT
+   :outline (HEADLINE-PLIST ...))
+
+TEXT is the file's text from the heading's first character to the end
+of its subtree, as typed.  Loud failure if ID is unknown or POINT is
+before the first heading."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (sns-roam--org-mode-for-parsing)
+      (let* ((headlines (seq-filter (lambda (element)
+                                      (org-ml-is-type 'headline element))
+                                    (sns-roam--ancestry-at-point
+                                     (org-ml-parse-this-buffer) point)))
+             (innermost (car (last headlines))))
+        (unless innermost
+          (sns-roam--signal-no-heading point file))
+        (list :id      id
+              :file    file
+              :point   point
+              :text    (buffer-substring-no-properties
+                        (org-ml-get-property :begin innermost)
+                        (org-ml-get-property :end innermost))
+              :outline (mapcar #'sns-roam--headline-to-plist headlines))))))
+
 (require 'org-ml)
 
 (defun sns-roam--existing-file-or-error (id file)

@@ -606,6 +606,91 @@ a property drawer — fix the upstream caller."
   constant, not a chain of tests, so a type joins the list without a
   change to the walk.
 
+* Read: a whole section under a heading
+
+Given a roam node ID and a buffer position =POINT= under a heading,
+return the text of the innermost heading's subtree: the heading line,
+its section and every child heading, up to the next heading at the
+same level or higher. An excerpt stops at the end of one paragraph or
+item, so a line further down the section is lost to it. On 2026-11-09
+a body search hit a section's heading and first line, the excerpt
+returned that first paragraph, and the link two lines below was never
+read (issue #1).
+
+The call reads the file into a temporary buffer and changes nothing.
+
+** Contract
+
+- *Input*:
+  - =ID= (string): the roam node UUID.
+  - =POINT= (integer): a buffer position in the node's file.
+- *Output*: plist =(:id :file :point :text :outline)=.
+  - =:text=: the buffer text from the start of the innermost heading
+    that encloses POINT to the end of its subtree, as typed. Org does
+    not print it again, so the text keeps its spacing and its markup.
+  - =:outline=: headline plists from root to leaf, as for
+    =sns-roam-excerpt=. The last one is the heading =:text= starts
+    with.
+- *Errors*: =sns-roam-unknown-id= and =sns-roam-missing-file= for ID.
+  =sns-roam-no-heading= when POINT is before the first heading, where
+  no subtree encloses it. A caller reads that part with
+  =sns-roam-excerpt=.
+
+** Implementation
+
+The walk is the excerpt's, =sns-roam--ancestry-at-point=, and the
+headings in the chain give both =:outline= and the subtree. A
+headline's =:begin= and =:end= span its whole subtree in org's
+parser, so the text between them is the section and its children.
+
+#+begin_src emacs-lisp
+(sns-roam-define-error no-heading "no heading encloses the point"
+  (point file))
+
+(defun sns-roam-subtree (id point)
+  "Return the subtree of the innermost heading over POINT in node ID's file.
+
+The result:
+  (:id ID
+   :file FILE
+   :point POINT
+   :text TEXT
+   :outline (HEADLINE-PLIST ...))
+
+TEXT is the file's text from the heading's first character to the end
+of its subtree, as typed.  Loud failure if ID is unknown or POINT is
+before the first heading."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (sns-roam--org-mode-for-parsing)
+      (let* ((headlines (seq-filter (lambda (element)
+                                      (org-ml-is-type 'headline element))
+                                    (sns-roam--ancestry-at-point
+                                     (org-ml-parse-this-buffer) point)))
+             (innermost (car (last headlines))))
+        (unless innermost
+          (sns-roam--signal-no-heading point file))
+        (list :id      id
+              :file    file
+              :point   point
+              :text    (buffer-substring-no-properties
+                        (org-ml-get-property :begin innermost)
+                        (org-ml-get-property :end innermost))
+              :outline (mapcar #'sns-roam--headline-to-plist headlines))))))
+#+end_src
+
+** Discipline notes
+
+- *Typed text.* =:text= is a slice of the buffer, never
+  =org-ml-to-string=, so what Claude reads is what the owner typed.
+- *The innermost heading.* A POINT in =** Tickets= under =* Projects=
+  gets the =** Tickets= subtree. A caller that wants the parent asks
+  with a point on the parent's own lines.
+- *Before the first heading is an error.* The text there has no
+  subtree, and returning all of the file would hide a caller that chose
+  the wrong primitive.
+
 * Mutate: set a file-level property
 
 Set or update one property in the top-level =:PROPERTIES:= drawer of

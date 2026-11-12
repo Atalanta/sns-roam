@@ -115,9 +115,9 @@ node per file. Every node has:
 
 ---
 
-## The Four Primitives
+## The Read Primitives
 
-All four are in `src/roam-api.org` in the sns-roam repository
+All five are in `src/roam-api.org` in the sns-roam repository
 (literate source; tangles to `lisp/sns-roam-api.el`). All return plists. All carry
 provenance (`:id`, `:file`, `:point` where applicable).
 
@@ -172,9 +172,28 @@ provenance (`:id`, `:file`, `:point` where applicable).
 - **Loud failure** if POINT has no enclosing excerpt container — that
   means POINT landed in a headline title line, a property drawer, or
   somewhere structurally weird. Caller bug; surface it.
-- **When**: after expanding, mine each `:point` returned by
-  `body-search` or each edge's `:point` from `expand`. One excerpt per
-  point of interest.
+- **When**: for a point before the first heading, which
+  `sns-roam-subtree` refuses. A point under a heading goes to
+  `sns-roam-subtree`, because an excerpt stops at the end of one
+  paragraph and misses the lines after it.
+
+### 5. `(sns-roam-subtree ID POINT)`: read the section under a heading
+
+- **Input**: a node UUID and a buffer point inside its file.
+- **Output**: plist `(:id :file :point :text :outline)`.
+  - `:text`: the file's text, as typed, from the innermost heading
+    over POINT to the end of its subtree. It holds the heading line,
+    every paragraph and list under it, and its child headings, and
+    stops before the next heading at the same level or higher.
+  - `:outline`: headline plists from root to leaf, as for
+    `sns-roam-excerpt`.
+- **Loud failure** `sns-roam-no-heading`, with `:point` and `:file`,
+  when POINT is before the first heading. Read that point with
+  `sns-roam-excerpt`.
+- **When**: in stage 4, for each point under a heading. On 2026-11-09
+  a body search hit a section's heading and first line, the excerpt
+  returned only the first paragraph, and the link two lines below it
+  was never read (issue #1).
 
 ---
 
@@ -187,7 +206,8 @@ provenance (`:id`, `:file`, `:point` where applicable).
 1. Seed by metadata     → find-by-metadata QUERY
 2. Seed by body         → body-search QUERY      (only if metadata empty)
 3. Expand graph         → expand each seed ID    (deduped subgraph union)
-4. Mine excerpts        → excerpt each :point of interest
+4. Mine text            → subtree each :point under a heading,
+                          excerpt each :point before the first heading
 5. Synthesise           → Claude's job
 ```
 
@@ -217,8 +237,12 @@ hit so excerpt-mining works.
 → alist `((ID1 . SUBGRAPH1) (ID2 . SUBGRAPH2) ...)`. Dedupe nodes
 across subgraphs in your synthesis, not in the elisp.
 
-**Mining many excerpts in one call:** same pattern — `mapcar` over
-`(id . point)` pairs, collecting plists.
+**Mining many points in one call:** `mapcar` over `(id . point)`
+pairs, collecting plists. Ask `sns-roam-subtree` first, and read the
+point with `sns-roam-excerpt` only when it raises
+`sns-roam-no-heading`, so a point before the first heading still gets
+its paragraph. Catch that one kind and no other: any other failure is
+a bug to report. The worked example below shows the script.
 </pipeline>
 
 ---
@@ -296,13 +320,19 @@ cites `Observability` (forward edge into the use-case).
 (let ((targets '(("1ED2CABC-..." . 269) ("9F66EA2C-..." . 591))))
   (with-temp-file "/tmp/roam-fetch-mine.out"
     (let ((print-length nil) (print-level nil))
-      (prin1 (mapcar (lambda (p) (sns-roam-excerpt (car p) (cdr p)))
+      (prin1 (mapcar (lambda (p)
+                       (condition-case nil
+                           (sns-roam-subtree (car p) (cdr p))
+                         (sns-roam-no-heading
+                          (sns-roam-excerpt (car p) (cdr p)))))
                      targets)
              (current-buffer)))))
 ```
 
-→ excerpts: heuristic's leading paragraph defining what an atomic note
-is; the concept's introduction tying atomic notes to observability.
+→ the heuristic's point is before its first heading, so it comes back
+as an excerpt: the leading paragraph defining what an atomic note is.
+The concept's point is under `* Why`, so it comes back as that
+section, with the introduction tying atomic notes to observability.
 
 **Stage 5 — synthesise.**
 
