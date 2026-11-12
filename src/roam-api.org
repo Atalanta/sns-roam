@@ -15,7 +15,9 @@ The bridge uses two libraries:
 Every public function takes and returns plists. Every edit to a
 note's first section goes through one write boundary,
 =sns-roam--update-section=. Every failure the bridge detects raises a
-condition under =sns-roam-error=, and no code path guesses.
+condition under =sns-roam-error=, except the empty series name in
+=sns-roam-meeting-note=, which is a =user-error= for the person at
+=M-x=. No code path guesses.
 
 This file tangles to =lisp/sns-roam-api.el=, which is committed, and
 is loaded with =(require 'sns-roam-api)=. From the repository root,
@@ -376,8 +378,9 @@ the graph.
     =:direction= (=:backward= or =:forward=), =:point= and =:context=.
     A backlink's =:point= is its position in the source file and its
     =:context= is its outline path. A forward link's =:point= is its
-    position in the centre's file and its =:context= is its
-    description text, or nil.
+    position in the centre's file and its =:context= is the plain text
+    its description starts with, or nil when the description is empty
+    or starts with markup.
 - *Errors*: =sns-roam-unknown-id= when ID names no node, and
   =sns-roam-missing-file= when the centre's file has moved since the
   last sync.
@@ -607,7 +610,9 @@ to existing notes.
 - *Output*: =(:id :file :diff)=, with =:diff= as "Show what an edit
   changed" describes.
 - *Side effect*: saves the file. Setting a property to the value it
-  has leaves the file as it was, and =:diff= is =""=.
+  has leaves the file as it was, and =:diff= is =""=, unless the
+  buffer holds edits the owner has not saved. The save writes those
+  too, and =:diff= shows them.
 - *Errors*: those of the write boundary, =sns-roam--update-section=,
   and =sns-roam-malformed-note= with =:missing property-drawer= and
   =:key= when the first section has no drawer.
@@ -782,7 +787,8 @@ The write boundary, =sns-roam--update-section=, keeps this contract:
   any buffer is visited. Then, before anything is written:
   - =sns-roam-malformed-note= with =:missing section= when the note
     has no first section.
-  - Any error SECTION-FN raises.
+  - Any =sns-roam-error= SECTION-FN raises. Other errors pass through
+    unchanged, without the keys below.
   - =sns-roam-unsupported-element= when org prints a kept element as
     other text once its blank lines change.
   - =sns-roam-reparse-mismatch= when the edits would not read back as
@@ -954,7 +960,8 @@ prints each of them in another form.
   after the last, form a run. Its old children are removed and its
   new ones written, as one edit from the first old child's =:begin=
   to the last one's =:end=. A run with no old children inserts at the
-  end of the kept child before it.
+  end of the kept child before it, or at the =:begin= of the first old
+  child when no kept child comes before it.
 - *Blank lines*: a new child that differs from its parsed child only
   in =:post-blank= is kept too. Its typed text stays, and only the
   blank lines after its last non-blank line change. The edit after it
@@ -978,9 +985,9 @@ prints each of them in another form.
 
 =sns-roam--section-edits= is the calculation, from two child lists to
 the edits, and needs no buffer. =sns-roam--apply-edits= is the only
-code that changes the buffer. =sns-roam--update-section= parses the
+code that changes the buffer. =sns-roam--edit-section= parses the
 note, calls the transform, and passes the edits from one to the
-other.
+other. =sns-roam--update-section= calls it with the buffer widened.
 
 #+begin_src emacs-lisp
 (defun sns-roam--kept-index (old-children start child)
@@ -1323,8 +1330,8 @@ phrasing and punctuation. Empty strings are dropped, so the paragraph
 holds no empty text nodes. The paragraph goes after the section's
 last child, spaced by =sns-roam--insert-beside=. That child keeps at
 least one blank line, and the paragraph takes the blank lines the
-child had. A link added above a headline therefore ends with its own
-blank line.
+child had. A link added above a headline therefore has as many blank
+lines before the headline as the last child had, which may be none.
 
 #+begin_src emacs-lisp
 (defun sns-roam-append-link (from-id to-id label before after)
@@ -1524,7 +1531,7 @@ for a one-element change. A rewritten paragraph can lose a line.
   printed and parsed again. Its body elements must match the planned
   ones by type and trimmed text.
 - *Errors*: each is raised before anything is written, so the file is
-  unchanged.
+  unchanged, except =sns-roam-diff-failure=, which comes after the save.
   - =sns-roam-unsupported-element= with =:type= and
     =:operation sns-roam-insert-element= when NEW-ELEMENT is not a
     paragraph.
@@ -1536,8 +1543,9 @@ for a one-element change. A rewritten paragraph can lose a line.
   - Those of the write boundary, with the keys its contract gives:
     =sns-roam-unknown-id=, =sns-roam-missing-file=,
     =sns-roam-malformed-note=, =sns-roam-unsupported-element= when org
-    prints the anchor as other text once its blank lines change, and
-    =sns-roam-diff-failure= after the save.
+    prints the element whose blank lines change as other text (the
+    anchor when AFTER is non-nil, the element before the anchor when
+    it is nil), and =sns-roam-diff-failure= after the save.
 
 ** Implementation
 
@@ -1663,9 +1671,12 @@ Claude never reads the note's file to choose the place, and never
 rewrites the body with =set-body= to add a line.
 
 The supported layout is the owner's reference note: paragraphs only,
-no headings, tables or lists. A "Current state:" paragraph, an "Open:"
-paragraph, an optional "Related claims:" paragraph, then one paragraph
-per history line, newest first, each starting =YYYY-MM-DD:=.
+no headings, tables or lists, with any undated paragraphs first and
+the history last, one paragraph per line, newest first, each starting
+=YYYY-MM-DD:=. The call checks only that layout, not the labels the
+roam-distill skill uses for the undated paragraphs ("Current state:",
+"Open:", "Related claims:"). A note with no dated paragraph is
+accepted, and its anchor is the last paragraph, with =:after t=.
 
 ** Contract
 
@@ -1947,8 +1958,10 @@ or the destination already exists."
 * Mutate: rename a node (title + filename together)
 
 Rewrite =#+title:= and rename the file's slug to match. The slug comes
-from org-roam's own =org-roam-node-slug=, so the file name is the one
-a fresh capture would give.
+from org-roam's own =org-roam-node-slug= for the node as the database
+holds it after the title is saved. The database follows the new title
+only when =org-roam-db-autosync-mode= is on; without it the slug comes
+from the old title.
 
 ** Contract
 
@@ -2052,9 +2065,10 @@ the bridge primitives.
     through =org-roam-node-slugify=, to match the capture template.
   - The timestamp prefix uses =current-time= by default. CREATED-TIME
     overrides both the prefix and the drawer property, so one date
-    reaches both. The two timestamps are formatted from the same
-    internal time value with =format-time-string=, with no string
-    round trips and no regex parsing.
+    reaches both. With CREATED-TIME, the two timestamps are formatted
+    from that one time value with =format-time-string=. Without it,
+    each reads the clock separately, so the two can differ when the
+    call crosses a second or a minute.
   - The =:CREATED:= property is written =[YYYY-MM-DD Day HH:MM]=, the
     capture template's =%U= form.
 
