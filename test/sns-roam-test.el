@@ -1729,10 +1729,14 @@ its :outline titles are OUTLINE."
 (ert-deftest sns-roam-rename-reports-a-node-gone-after-the-title-write ()
   ;; A node vanishes between the title write and the lookup only if the
   ;; database changes between them.  The stub makes the title write,
-  ;; the call before the lookup, do nothing for an ID with no node.
+  ;; the call before the lookup, return an empty file with no node, so
+  ;; indexing it again finds nothing for the ID.
   (sns-roam-test--with-roam-dir
     (sns-roam-test--should-have
-     (cl-letf (((symbol-function 'sns-roam-set-keyword) #'ignore))
+     (cl-letf* ((empty (expand-file-name "empty.org" org-roam-directory))
+                (_ (with-temp-file empty))
+                ((symbol-function 'sns-roam-set-keyword)
+                 (lambda (&rest _) (list :file empty))))
        (sns-roam-test--error-data
         'sns-roam-unknown-id
         (lambda () (sns-roam-rename "missing-id" "New title"))))
@@ -2961,6 +2965,16 @@ Each block loses the indentation of its opening fence."
       (with-current-buffer buffer
         (should (equal before (buffer-string)))
         (should-not (buffer-modified-p))))))
+
+(ert-deftest sns-roam-rename-uses-the-new-title-without-autosync ()
+  ;; Without autosync the database would still hold the old title when
+  ;; the slug is taken from it.
+  (sns-roam-test--with-typed-note
+    (org-roam-db-autosync-mode -1)
+    (let ((renamed (plist-get (sns-roam-rename "typed-id" "Renamed note") :file)))
+      (should (equal "20261111090000-renamed_note.org"
+                     (file-name-nondirectory renamed)))
+      (should-not (file-exists-p file)))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

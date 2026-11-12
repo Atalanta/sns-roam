@@ -1389,6 +1389,9 @@ capture template. Returns a plist (:id :title :file :diff), where
 :diff is the title change `sns-roam-set-keyword' made, labelled with
 the file's name before the rename."
   (let* ((title-write (sns-roam-set-keyword id "TITLE" new-title))
+         ;; Without org-roam-db-autosync-mode the database still holds
+         ;; the old title, and the slug would come from it.
+         (_           (org-roam-db-update-file (plist-get title-write :file)))
          (node        (org-roam-node-from-id id))
          (_           (unless node
                         (sns-roam--signal-unknown-id id)))

@@ -2426,10 +2426,9 @@ or the destination already exists."
 * Mutate: rename a node (title + filename together)
 
 Rewrite =#+title:= and rename the file's slug to match. The slug comes
-from org-roam's own =org-roam-node-slug= for the node as the database
-holds it after the title is saved. The database follows the new title
-only when =org-roam-db-autosync-mode= is on; without it the slug comes
-from the old title.
+from org-roam's own =org-roam-node-slug= for the node, after the
+note's file is indexed again with =org-roam-db-update-file=, so the slug
+follows the new title whether or not =org-roam-db-autosync-mode= is on.
 
 ** Contract
 
@@ -2462,6 +2461,9 @@ capture template. Returns a plist (:id :title :file :diff), where
 :diff is the title change `sns-roam-set-keyword' made, labelled with
 the file's name before the rename."
   (let* ((title-write (sns-roam-set-keyword id "TITLE" new-title))
+         ;; Without org-roam-db-autosync-mode the database still holds
+         ;; the old title, and the slug would come from it.
+         (_           (org-roam-db-update-file (plist-get title-write :file)))
          (node        (org-roam-node-from-id id))
          (_           (unless node
                         (sns-roam--signal-unknown-id id)))
