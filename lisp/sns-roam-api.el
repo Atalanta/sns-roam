@@ -143,6 +143,14 @@ point at the start of buffer."
   (when (re-search-forward "^#\\+title:.*\n" nil t)
     (goto-char (match-end 0))))
 
+(defun sns-roam--org-mode-for-parsing ()
+  "Put the current temporary buffer in org-mode to parse its text.
+`org-inhibit-startup' skips the #+STARTUP actions, such as aligning
+tables, which would change the text before it is read.  Mode hooks
+are delayed, so the user's org-mode hooks do not run either."
+  (let ((org-inhibit-startup t))
+    (delay-mode-hooks (org-mode))))
+
 (defun sns-roam--search-file (file query)
   "Return a list of hit plists for QUERY in FILE.
 Empty list if no hits or file isn't a roam node."
@@ -153,7 +161,7 @@ Empty list if no hits or file isn't a roam node."
       (insert-file-contents file)
       ;; `org-id-get' reads the drawer through `org-element-at-point',
       ;; which warns in any buffer not in org-mode.
-      (delay-mode-hooks (org-mode))
+      (sns-roam--org-mode-for-parsing)
       (let ((id (org-with-point-at 1 (org-id-get))))
         (when id
           (let* ((node (org-roam-node-from-id id))
@@ -212,7 +220,7 @@ Loud failure if SOURCE-NODE's file has moved since the last sync."
                   (org-roam-node-file source-node)))
          (parsed (with-temp-buffer
                    (insert-file-contents file)
-                   (org-mode)
+                   (sns-roam--org-mode-for-parsing)
                    (org-ml-parse-this-buffer)))
          (links  (org-ml-match '(:any * link) parsed)))
     (cl-loop for link in links
@@ -312,7 +320,7 @@ a property drawer — fix the upstream caller."
   (let* ((file    (sns-roam--node-file-or-error id))
          (root    (with-temp-buffer
                     (insert-file-contents file)
-                    (org-mode)
+                    (sns-roam--org-mode-for-parsing)
                     (org-ml-parse-this-buffer)))
          (chain   (sns-roam--ancestry-at-point root point))
          (outline (cl-loop for el in chain
@@ -444,7 +452,7 @@ that section's children. Empty STRING yields nil."
                       (insert string)
                       ;; Org's parser expects an org-mode buffer, and
                       ;; parts of it warn in any other.
-                      (delay-mode-hooks (org-mode))
+                      (sns-roam--org-mode-for-parsing)
                       (org-ml-parse-this-buffer)))
            (section (car (org-ml-get-children tree))))
       (if section (org-ml-get-children section) nil))))
@@ -732,7 +740,7 @@ missing line break."
          (reparsed (with-temp-buffer
                      (insert text)
                      (sns-roam--apply-edits edits)
-                     (delay-mode-hooks (org-mode))
+                     (sns-roam--org-mode-for-parsing)
                      (let ((first (car (org-ml-get-children
                                         (org-ml-parse-this-buffer)))))
                        (when (org-ml-is-type 'section first)

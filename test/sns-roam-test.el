@@ -2609,5 +2609,48 @@ Each block loses the indentation of its opening fence."
                        (load-file file)))))))))
       (delete-directory directory t))))
 
+(defconst sns-roam-test--startup-align-note
+  (concat ":PROPERTIES:\n:ID: align-id\n:END:\n#+title: Align\n#+startup: align\n"
+          "Intro.\n\n|a|bb|\n|ccc|d|\n")
+  "A note that asks org to align its tables when it opens.")
+
+(ert-deftest sns-roam-body-search-reads-a-startup-align-note-as-it-is ()
+  ;; With #+startup: align, entering org-mode would realign the table
+  ;; before the search reads it.
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "align.org" org-roam-directory)))
+      (sns-roam-test--register file sns-roam-test--startup-align-note)
+      (let ((hit (seq-find (lambda (h) (equal file (plist-get h :file)))
+                           (sns-roam-body-search "ccc|d"))))
+        (should hit)
+        (should (equal "|ccc|d|" (plist-get hit :hit-text)))
+        (should (equal "|ccc|d|"
+                       (with-temp-buffer
+                         (insert-file-contents file)
+                         (goto-char (plist-get hit :point))
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position)))))))))
+
+(ert-deftest sns-roam-replace-element-applies-on-a-startup-align-note ()
+  ;; The preflight check parses a copy; aligning the copy's table would
+  ;; make a good edit look like a mismatch.  Visiting the note obeys its
+  ;; #+startup: align, as when the owner opens it, so the save writes the
+  ;; aligned table and :diff reports it.
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "align.org" org-roam-directory)))
+      (sns-roam-test--register file sns-roam-test--startup-align-note)
+      (unwind-protect
+          (progn
+            (let ((diff (plist-get
+                         (sns-roam-replace-element
+                          "align-id"
+                          (lambda (node) (equal "Intro." (org-ml-to-trimmed-string node)))
+                          (org-ml-build-paragraph :post-blank 1 "New intro."))
+                         :diff)))
+              (should (string-match-p "^New intro\\.$" (sns-roam-test--file-text file)))
+              (should (string-match-p "^-|ccc|d|$" diff))
+              (should (string-match-p "^\\+| ccc | d  |$" diff))))
+        (sns-roam-test--kill-file-buffer file)))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
