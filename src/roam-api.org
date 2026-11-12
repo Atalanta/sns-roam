@@ -1459,7 +1459,8 @@ an ambiguous edit never changes the wrong place.
   the file.
 - *Errors*: =sns-roam-match-count= with =:count= when PRED matches no
   element or several, and those of the write boundary. The file is
-  unchanged.
+  unchanged after each of them except =sns-roam-diff-failure=, which
+  comes after the save.
 - *Discipline*: one match or an error, never a guess among several.
   AST in, AST out, with no string editing. It replaces an element
   entire and does not edit inside one.
