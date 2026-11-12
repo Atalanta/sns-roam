@@ -50,4 +50,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` tests `sns-roam-subtree` at a point on a heading line, inside a nested list under it, and in a section with child headings, each asserting `:text` equal to the typed region and `:outline`; a test shows `sns-roam-no-heading` for a point before the first heading, and one shows the file unchanged after a call. The builder runs S28.1 and S28.2 through `claude -p` against a separate Emacs server and shows both answers. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` tests `sns-roam-subtree` at a point on a heading line, inside a nested list under it, and in a section with child headings, each asserting `:text` equal to the typed region and `:outline`; each fixture has a following heading at the same level, such as `* Next`, and the test shows its text absent from `:text`; a test shows `sns-roam-no-heading` for a point before the first heading, and one shows the file unchanged after a call. The builder runs S28.1 and S28.2 through `claude -p` against a separate Emacs server and shows both answers. `mise run check` and `mise run test` pass.
