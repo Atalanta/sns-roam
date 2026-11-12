@@ -18,8 +18,7 @@ Tagging today goes through `sns-roam-set-keyword` with `FILETAGS`, which appends
 
 ## Out of scope
 
-- Tags on headings, and adding or removing one tag at a time; `sns-roam-set-tags` sets the whole list.
-- Any change to `sns-roam-set-keyword` for other keys.
+- Tags on headings, adding or removing one tag at a time (`sns-roam-set-tags` sets the full list), and any change to `sns-roam-set-keyword` for other keys.
 
 ## Invariants
 
@@ -32,7 +31,7 @@ Tagging today goes through `sns-roam-set-keyword` with `FILETAGS`, which appends
 Scenario: S26.1 Tagging a note with a body
   Given a note with a title and two paragraphs, and no tags
   When the owner asks Claude to tag it `tech_leadership`
-  Then the line after `#+title:` is `#+filetags: :tech_leadership:`, and roam-fetch finds the note when asked about `tech_leadership`
+  Then the diff adds only `#+filetags: :tech_leadership:`, on the line after `#+title:`, and roam-fetch finds the note when asked about `tech_leadership`
 
 Scenario: S26.2 Retagging a note whose tags sit after its body
   Given a note whose only `#+filetags: :old:` line is after its body, as `sns-roam-set-keyword` left it
@@ -58,4 +57,4 @@ None.
 
 ## Done when
 
-`test/sns-roam-test.el` has tests for S26.1, S26.2 and S26.3, asserting the file text after `#+title:` and, for S26.3, the error's `:tag` and unchanged bytes. Tests show setting tags twice leaves one line, `sns-roam-create-node` with TAGS `("tech_leadership")` writes the line under `#+title:`, and `sns-roam-find-by-metadata "tech_leadership"` finds the tagged note. The builder runs S26.1 through `claude -p` against a separate Emacs server. `mise run check` and `mise run test` pass.
+`test/sns-roam-test.el` has tests for S26.1, S26.2 and S26.3, asserting the file text after `#+title:` and, for S26.3, the error's `:tag` and unchanged bytes. Tests show setting tags twice leaves one line, setting `()` on a tagged note removes the line and its diff shows only that line removed, `sns-roam-create-node` with TAGS `("tech_leadership")` writes the line under `#+title:`, and `sns-roam-find-by-metadata "tech_leadership"` finds the tagged note. The builder runs S26.1 through `claude -p` against a separate Emacs server. `mise run check` and `mise run test` pass.
