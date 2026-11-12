@@ -1,18 +1,21 @@
-#+TITLE: Roam API — Claude bridge into the slipbox
+#+TITLE: Roam API: the Claude bridge into the slipbox
 #+AUTHOR: SNS
 #+PROPERTY: header-args:emacs-lisp :tangle "../lisp/sns-roam-api.el" :mkdirp yes :results silent
 
 * Overview
 
-Lisp-native bridge that lets Claude read (and eventually write) the
-=org-roam= slipbox. The contract is plist-shaped s-expressions
-between Emacs and Claude — no JSON, no XML.
+A Lisp bridge that lets Claude read and edit the =org-roam= slipbox.
+Emacs and Claude exchange plists, never JSON or XML.
 
-Two-layer split:
-- *Roam API* (=org-roam-node-list=, =org-roam-node-from-id=,
+The bridge uses two libraries:
+- The *Roam API* (=org-roam-node-list=, =org-roam-node-from-id=,
   =org-roam-backlinks-get=) for graph metadata and traversal.
-- *org-ml* for body content / excerpts / structural edits (write
-  side, later).
+- *org-ml* for body content, excerpts and every edit to a note.
+
+Every public function takes and returns plists. Every edit to a
+note's first section goes through one write boundary,
+=sns-roam--update-section=. Every failure the bridge detects raises a
+condition under =sns-roam-error=, and no code path guesses.
 
 This file tangles to =lisp/sns-roam-api.el=, which is committed, and
 is loaded with =(require 'sns-roam-api)=. From the repository root,
@@ -24,8 +27,8 @@ emacs --batch --load org --eval '(org-babel-tangle-file "src/roam-api.org")'
 
 * Header
 
-Library header and dependencies. =org-roam= is already pulled in by
-=sns-knowledge-base=; we just reference its API here.
+The library header declares what the package requires: Emacs 31.1,
+=org-roam= and =org-ml=. Loading the library installs nothing.
 
 #+begin_src emacs-lisp
 ;;; sns-roam-api.el --- Lisp bridge into the org-roam slipbox -*- lexical-binding: t; -*-
@@ -50,52 +53,64 @@ Library header and dependencies. =org-roam= is already pulled in by
 
 Every failure the bridge raises is a condition under =sns-roam-error=.
 A caller tells one kind from another by its symbol, and reads the
-facts as data, never from the message (issue #16). A handler on
-=error= still catches each one, because =sns-roam-error= is a child of
-=error=.
+facts as data, never from the message. A handler on =error= still
+catches each one, because =sns-roam-error= is a child of =error=.
+Two failures come from Emacs itself: =sns-roam-meeting-note= raises
+=user-error= on an empty series name, and a missing =diff= program
+raises =file-missing=.
 
 ** Contract
 
 - *Data*: each condition's data is a plist that starts with =:kind=,
-  the condition's symbol, has =:id= whenever the call had a node ID,
-  then the facts. =(plist-get (cdr err) :kind)= names the failure.
+  the condition's symbol, then the facts. It has =:id= whenever the
+  call had a node ID, except =sns-roam-diff-failure=, which the write
+  boundary raises after the save, with =:file=. =(plist-get (cdr err) :kind)= gives the kind.
 - *Message*: =error-message-string= prints the condition's message,
   which starts with =sns-roam: =, followed by the plist.
-- *Facts*, by condition:
+- *Facts*, by condition. A fact its declaration lists after
+  =&optional= appears only when the site knows it.
   - =sns-roam-unknown-id=: =:id= alone.
-  - =sns-roam-missing-file=: =:path=, the file the database holds. The
-    note moved and the database has not been synced since.
-  - =sns-roam-malformed-note=: =:file= and =:missing=, one of
-    =section=, =property-drawer= or =roam-filename=.
-  - =sns-roam-no-excerpt-container=: =:point= and =:file=.
-  - =sns-roam-match-count=: =:operation= and =:count=.
-  - =sns-roam-unsupported-element=: =:operation= and =:type=.
+  - =sns-roam-missing-file=: =:id= and =:path=, the file the database
+    holds. The note moved and the database has not been synced since.
+  - =sns-roam-malformed-note=: =:missing=, one of =section=,
+    =property-drawer= or =roam-filename=, and =:file=. A missing drawer
+    adds the =:key= being set, and a bad file name adds its =:name=.
+  - =sns-roam-no-excerpt-container=: =:id=, =:point= and =:file=.
+  - =sns-roam-match-count=: =:count= and =:operation=, and =:anchor=
+    for a history line whose text appears twice.
+  - =sns-roam-unsupported-element=: =:type= and =:operation=, and
+    =:title= for a headline.
   - =sns-roam-history-layout=: =:reason=, one of =no-paragraphs=,
     =not-one-run= or =not-newest-first=, and =:dates= for the two dates
     out of order.
   - =sns-roam-bad-date=: =:date=.
-  - =sns-roam-reparse-mismatch=: =:file=, =:planned= and =:actual=, the
-    type-and-text lists the check compares.
-  - =sns-roam-file-exists=: =:path=.
-  - =sns-roam-id-conflict=: =:registered= and =:path=.
-  - =sns-roam-index-failure=: =:expected= and =:actual=.
-  Each plist also carries any other value its old message named, such
-  as =:anchor= for a duplicated history line.
+  - =sns-roam-reparse-mismatch=: =:planned= and =:actual=, the
+    type-and-text lists the check compares, and =:file=.
+  - =sns-roam-file-exists=: =:id= and =:path=. Its declaration also
+    allows =:slug=, for a new name that is the file's own, but the
+    check that a file has the new name raises first.
+  - =sns-roam-id-conflict=: =:id=, =:registered= and =:path=.
+  - =sns-roam-index-failure=: =:id=, =:expected= and =:actual=.
+  - =sns-roam-diff-failure=: =:status=, =:output= and =:file=. The
+    section "Show what an edit changed" declares it.
 - *Context*: a pure calculation raises the facts it holds. The public
   function that called it adds what it knows and the calculation does
-  not, through =sns-roam--call-with-context=: the write boundary adds
+  not, through =sns-roam--call-with-context=. The write boundary adds
   =:id=, =:file= and =:operation=, the public function's symbol.
 
 ** Declaring a kind
 
-Each kind is declared once, with =sns-roam-define-error=, which names
-its message and its fields (slice 22). A site raises it by calling
-=sns-roam--signal-KIND= with the field values, so the byte compiler
-warns when a call passes the wrong number of facts. A field after
-=&optional= is left out of the data when its value is nil. Fields
-are the facts the site knows; =sns-roam--call-with-context= adds the
-rest. =sns-roam--error-kinds= lists every declared kind, and a test
-fails when no test raises one of them.
+Each kind is declared once, with =sns-roam-define-error=, which takes
+KIND, a symbol, MESSAGE, a string, and FIELDS, an argument list. It
+defines the condition =sns-roam-KIND= and the function
+=sns-roam--signal-KIND=, and raises nothing itself. A site raises the
+condition by calling =sns-roam--signal-KIND= with the field values,
+so the byte compiler warns when a call passes the wrong number of
+facts. A field after =&optional= is left out of the data when its
+value is nil. Fields are the facts the site knows, and
+=sns-roam--call-with-context= adds the rest. =sns-roam--error-kinds=
+lists every declared kind, and a test fails when no test raises one
+of them.
 
 ** Implementation
 
@@ -188,16 +203,18 @@ errors pass through unchanged."
 
 * Seed: find by metadata
 
-The cheapest, highest-recall seed operation. Filter
-=org-roam-node-list= by substring match against title, alias, or
-tag. Returns a list of plists, one per matching node.
+The first step of the read pipeline, and the cheapest. It filters
+=org-roam-node-list= by a substring of a title, an alias or a tag,
+and returns one plist per matching node.
 
 ** Contract
 
-- *Input*: a query string (case-insensitive substring).
-- *Output*: list of plists =(:id :title :file :tags :aliases)=.
-  Empty list on no match. Never =nil=-pollutes a field — missing
-  tags / aliases come back as =nil=.
+- *Input*: QUERY, a string matched as a case-insensitive substring.
+- *Output*: a list of plists =(:id :title :file :tags :aliases)=, one
+  per node. A node with several aliases still appears once. The list
+  is empty when nothing matches. A node with no tags or aliases has
+  nil under that key.
+- *Errors*: none.
 
 ** Implementation
 
@@ -239,42 +256,44 @@ appear N+1 times."
 
 ** Discipline notes
 
-- *Plist returns, always.* Per [[file:~/.claude/projects/-Users-stephen-nelsonsmith-Developer-aldi-compass/memory/roam_claude_design.md][roam-claude-design]]: no opaque
-  =org-roam-node= structs leak across the API boundary. Claude
-  reads plists, full stop.
-- *Provenance baked in.* =:id= and =:file= ride along on every
-  result so excerpts and citations are mechanical.
-- *No truncation.* If the slipbox grows past the point where
-  full-list scans hurt, we add an =:limit= keyword later — but
-  silent caps are forbidden by the design discipline.
+- *Plist returns, always.* No =org-roam-node= struct crosses the API
+  boundary. Claude reads plists only.
+- *Provenance in every result.* =:id= and =:file= come with every
+  result, so excerpts and citations need no further lookup.
+- *No truncation.* The call returns every match. A cap that drops
+  results without saying so is forbidden.
 
 * Read: search note bodies
 
-Substring search (case-insensitive) over the body text of every
-=.org= file in =org-roam-directory=. Used as a seed step when
-the query phrase isn't in any node's title, alias, or tag — per
-the locked design's pipeline:
+A case-insensitive substring search over the body text of every
+=.org= file under =org-roam-directory=. It seeds a search when the
+phrase is in no node's title, alias or tag. The read pipeline runs in
+four steps:
 
   1. Seed by metadata (=find-by-metadata=).
   2. *Seed by body* (this function).
   3. Expand into the graph (=expand=).
-  4. Mine excerpts (=excerpt=, future).
+  4. Mine excerpts (=excerpt=).
 
-Returned as a flat list of *hit* plists, one per match (a file
-with three matches yields three results). Each hit carries:
+** Contract
 
-- =:id= — the roam node UUID for the file (looked up via
-  =org-id-get= at point 1).
-- =:title=, =:file= — node identity from the roam DB.
-- =:line= — 1-indexed line number.
-- =:point= — buffer position of the match (suitable for
-  =goto-char=).
-- =:hit-text= — the whole line containing the match, trimmed.
-
-The property drawer at the top of each file (=:ID:= UUID and
-friends) is skipped so a search for a UUID-looking string
-doesn't return every node. We do this by skipping until past
-=#+title:=.
+- *Input*: QUERY, a string matched as a case-insensitive substring.
+- *Output*: a flat list of hit plists, one per match, so a file with
+  three matches gives three hits. Each hit holds:
+  - =:id=: the roam node UUID of the file, read with =org-id-get= at
+    point 1.
+  - =:title=: the node's title from the roam database, or nil when the
+    database lacks the ID.
+  - =:file=: the file searched.
+  - =:line=: the line number, counted from 1.
+  - =:point=: the buffer position of the match, for =goto-char=.
+  - =:hit-text=: the line that holds the match, trimmed.
+  The list is empty when nothing matches.
+- *Skipped*: a file with no =:ID:= at its top is not a roam node and
+  gives no hits. Text up to and including the first =#+title:= line is
+  not searched, so a search for a string like a UUID does not return
+  every node.
+- *Errors*: none.
 
 ** Implementation
 
@@ -335,25 +354,33 @@ node) are skipped silently. Empty list on no match."
 
 * Read: expand a node (one-hop subgraph)
 
-Given a roam node ID, return the set of nodes reachable in one
-hop — both incoming (=backlinks=) and outgoing (=forward
-links=). Returned as a subgraph plist =(:nodes (...) :edges
-(...))=, never flattened, per the locked design.
+Given a roam node ID, return the nodes one hop away, through incoming
+links (backlinks) and outgoing links (forward links). The result is a
+subgraph plist =(:nodes (...) :edges (...))=, never a flat list.
 
-- =:nodes= — the unique set of source/target nodes deduped by
-  =:id=, each in the standard plist shape.
-- =:edges= — the relationships, one plist per link. Carries
-  =:source-id=, =:target-id=, =:direction= (=:forward= or
-  =:backward=), =:point= (provenance), and =:context= (the
-  outline path or surrounding text excerpt).
+Backlinks come from =org-roam-backlinks-get=, because roam indexes
+them. Roam does not index forward links, so the call walks the file's
+org-ml AST for them and never greps the text. Only =id:= links count
+as edges. A fuzzy =[[X]]= link names no node, so it is not part of
+the graph.
 
-Backlinks come from =org-roam-backlinks-get= (roam already
-indexes them). Forward links are walked with =org-ml= over the
-file's AST — roam doesn't index forward links, and per the
-design we use AST walking rather than text grep. Only =id:=
-links count as edges; fuzzy =[[X]]= autovivification
-placeholders are unresolved and don't (yet) participate in the
-graph.
+** Contract
+
+- *Input*: ID, a roam node UUID.
+- *Output*: =(:nodes NODES :edges EDGES)=.
+  - =:nodes=: the centre node first, then the node at the other end of
+    each edge, once per distinct =:id=, each as =find-by-metadata=
+    returns it. A note that links to itself therefore appears twice. A link target the database lacks appears with its =:id= and
+    nil under every other key.
+  - =:edges=: one plist per link, with =:source-id=, =:target-id=,
+    =:direction= (=:backward= or =:forward=), =:point= and =:context=.
+    A backlink's =:point= is its position in the source file and its
+    =:context= is its outline path. A forward link's =:point= is its
+    position in the centre's file and its =:context= is its
+    description text, or nil.
+- *Errors*: =sns-roam-unknown-id= when ID names no node, and
+  =sns-roam-missing-file= when the centre's file has moved since the
+  last sync.
 
 ** Implementation
 
@@ -435,49 +462,47 @@ Loud failure if ID has no roam node."
 
 * Read: excerpt the element enclosing a point
 
-Given a roam node ID and a buffer =POINT= inside its file, return
-the smallest "excerpt container" element enclosing that point —
-plus the headline ancestry leading to it. Used as the final mining
-step in the locked design's read pipeline:
+Given a roam node ID and a buffer position =POINT= in its file, return
+the smallest excerpt container that encloses the position, with the
+headlines above it. It is the last step of the read pipeline:
 
   1. Seed by metadata (=find-by-metadata=).
-  2. Seed by body (=body-search=) — yields hit plists with =:point=.
+  2. Seed by body (=body-search=), which gives hit plists with =:point=.
   3. Expand into the graph (=expand=).
-  4. *Mine excerpts* (this function) — turn a =:point= into the
-     surrounding paragraph plus its outline path.
-  5. Synthesise (Claude's job).
+  4. *Mine excerpts* (this function): turn a =:point= into the
+     paragraph around it and its outline path.
+  5. Synthesise, which Claude does.
 
-Pure transformation on the AST. No mutation, no buffer state.
+The call reads the file into a temporary buffer and changes nothing.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — roam node UUID. Loud failure if unknown.
-  - =POINT= (integer) — buffer position inside the node's file.
-- *Output*: plist
-  =(:id :file :point :text :container-type :outline)=.
-  - =:text= — the serialised excerpt container (a paragraph,
-    item, quote-block, or verse-block).
-  - =:container-type= — the symbol naming the container's element
-    type. Lets a caller filter (e.g. mining quotes only).
-  - =:outline= — list of headline plists, root-to-leaf ancestry,
-    each =(:level :raw-value :tags :todo-keyword)=. Empty list
-    when POINT is in the leading section before any headline.
-- *Discipline*: loud failure if POINT has no enclosing excerpt
-  container — that means POINT landed in a headline title line,
-  a property-drawer, or somewhere structurally weird, which is a
-  bug in whatever produced the POINT.
+  - =ID= (string): the roam node UUID.
+  - =POINT= (integer): a buffer position in the node's file.
+- *Output*: plist =(:id :file :point :text :container-type :outline)=.
+  - =:text=: the printed excerpt container, trimmed. A container is a
+    paragraph, an item, a quote block or a verse block.
+  - =:container-type=: the symbol for the container's element type,
+    so a caller can filter, for example to quotes.
+  - =:outline=: a list of headline plists from root to leaf, each
+    =(:level :raw-value :tags :todo-keyword)=. It is empty when POINT
+    is in the section before the first headline.
+- *Errors*: =sns-roam-unknown-id= and =sns-roam-missing-file= for ID.
+  =sns-roam-no-excerpt-container= when no container encloses POINT.
+  Then POINT is on a headline line, in a property drawer or somewhere
+  else no excerpt comes from, and whatever produced POINT has a bug.
 
 ** Implementation
 
-The walk: pre-order traversal of the AST collecting every element
+The walk visits the AST in pre-order and collects every element
 whose =[:begin, :end)= window contains POINT. The result is the
-ancestry chain root-to-leaf — order is implicit in the recursion.
-Two pluckings derive =:outline= and the container from that chain.
+ancestry chain from root to leaf, in the order of the recursion.
+=:outline= and the container are both filters over that chain.
 
-The excerpt-container set excludes =plain-list=: a list's =item=
-children are the better mining unit. A POINT in a list bullet
-gets the bullet text, not the entire list.
+The container types exclude =plain-list=, because a list's =item=
+children make better excerpts. A POINT in a bullet gets that bullet's
+text, not the text of its list.
 
 #+begin_src emacs-lisp
 (defconst sns-roam--excerpt-container-types
@@ -551,53 +576,50 @@ a property drawer — fix the upstream caller."
 
 ** Discipline notes
 
-- *One walk, two pluckings.* =sns-roam--ancestry-at-point= produces
-  the full root-to-leaf chain; =:outline= and the container are
-  filters over that single result. Resist the temptation to write
-  separate "find headlines" and "find paragraph" walkers — they'd
-  duplicate the recursion and drift apart over time.
-- *Loud failure when POINT has no container.* A property drawer or
-  a headline title line is a sign that the upstream =:point= was
-  built wrong (e.g. body-search hit something it shouldn't have).
-  Surfacing the bug is more valuable than returning =nil=.
-- *=plain-list= deliberately excluded from containers.* A user
-  searching for text inside a bullet wants the bullet, not the
-  whole list. Items nest cleanly; lists don't.
-- *Predicate as data.* =sns-roam--excerpt-container-types= is a
-  defconst, not buried in an =or= chain. Easy to extend (add
-  =example-block= for code excerpts later) without touching the
-  walk.
+- *One walk, two filters.* =sns-roam--ancestry-at-point= builds the
+  chain from root to leaf, and =:outline= and the container both
+  filter that one result, so the outline and the container always
+  come from the same chain.
+- *Loud failure when POINT has no container.* A property drawer or a
+  headline line means the =:point= was built wrong, for example by a
+  body search that matched where it should not. Raising shows the bug,
+  where nil would hide it.
+- *=plain-list= is not a container.* A search for text in a bullet
+  wants the bullet, not its list. Items nest cleanly and lists do not.
+- *Container types as data.* =sns-roam--excerpt-container-types= is a
+  constant, not a chain of tests, so a type joins the list without a
+  change to the walk.
 
 * Mutate: set a file-level property
 
-Set or update a single property in the top-level =:PROPERTIES:=
-drawer of a roam node's file. Used for retrofitting metadata
-(=:KIND:=, =:CREATED:=, etc.) onto existing notes, and as the
-foundation for any future =roam-distill= writes that touch
-file-level metadata.
+Set or update one property in the top-level =:PROPERTIES:= drawer of
+a roam node's file. It adds metadata such as =:KIND:= or =:CREATED:=
+to existing notes.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam node UUID. Located via
-    =org-roam-node-from-id=. *Loud failure* if no such node exists.
-  - =KEY= (string) — property name, without colons (e.g. =KIND=,
-    not =:KIND:=).
-  - =VALUE= (string) — property value.
+  - =ID= (string): the roam node UUID, found with
+    =org-roam-node-from-id=.
+  - =KEY= (string): the property name without colons, such as =KIND=,
+    not =:KIND:=.
+  - =VALUE= (string): the property value.
 - *Output*: =(:id :file :diff)=, with =:diff= as "Show what an edit
-  changed" describes. Errors loudly otherwise.
-- *Side effect*: rewrites the file on disk. The mutation is
-  idempotent — calling twice with the same value is a no-op
-  (writes the same bytes).
-- *Discipline*: one node, one property, one call. No batching,
-  no fuzzy match. Caller resolves the ID first.
+  changed" describes.
+- *Side effect*: saves the file. Setting a property to the value it
+  has leaves the file as it was, and =:diff= is =""=.
+- *Errors*: those of the write boundary, =sns-roam--update-section=,
+  and =sns-roam-malformed-note= with =:missing property-drawer= and
+  =:key= when the first section has no drawer.
+- *Discipline*: one node, one property, one call. No batching and no
+  fuzzy match. The caller resolves the ID first.
 
 ** Implementation
 
-Uses =org-ml= to parse the file's first =section=, find its
-=property-drawer= and set the requested =node-property=. The write
+The call parses the file's first =section= with =org-ml=, finds its
+=property-drawer= and sets the requested =node-property=. The write
 goes through =sns-roam--update-section=, so the drawer is the only
-element written. Never =Edit='s the file as text.
+element written. The file is never edited as text.
 
 #+begin_src emacs-lisp
 (require 'org-ml)
@@ -680,19 +702,16 @@ written and every other element keeps its text."
 
 ** Discipline notes
 
-- *Loud failure on unknown ID.* No silent skip, no auto-create.
-  If the caller passes a UUID that doesn't resolve, that's a bug
-  upstream and we want the stack trace.
-- *No append-if-no-drawer.* If a roam file somehow lacks a
-  property-drawer, we error rather than build one. Building one
-  is a different operation (=sns-roam-init-properties= or similar)
-  with different semantics; conflating them hides bugs.
-- *Idempotent on re-application.* Setting =:KIND:= to =permanent=
-  twice writes the same bytes both times. Useful for retrofit
-  scripts that may re-run.
-- *Single-property granularity.* Multi-property updates compose
-  by repeated calls. Resist the urge to add a batched API until
-  we have a real callsite that needs it.
+- *Loud failure on an unknown ID.* No silent skip and no new node. A
+  UUID that resolves to nothing is a bug in the caller, and the error
+  shows it.
+- *No drawer is built.* If a roam file lacks a property drawer, the
+  call raises and adds none, so the error shows whatever left the file
+  without one.
+- *Idempotent.* Setting =:KIND:= to =permanent= twice leaves the file
+  as the first call left it, so a retrofit script can run again.
+- *One property per call.* Updates to several properties take several
+  calls.
 
 * Mutate: replace the body of a node
 
@@ -703,47 +722,74 @@ heading with its content stay as they are. Affiliated keywords
 (=#+name:=, =#+caption:=) belong to the element below them and are
 removed with it. To change a heading, edit it by hand.
 
-Used for trimming / rewriting fleeting captures into atomic
-permanent notes. The minimum viable body-write — surgical
-paragraph edits are a later primitive.
+It turns a fleeting capture into an atomic permanent note. To change
+one element and leave the rest, use =sns-roam-replace-element= or
+=sns-roam-insert-element=.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam node UUID. Loud failure if unknown.
-  - =NEW-BODY= (string) — the replacement body text. May be empty.
-    Should *not* include the property drawer or =#+title:= line —
-    those are preserved automatically. Trailing newline normalised
-    (we ensure the file ends in exactly one =\n=).
+  - =ID= (string): the roam node UUID.
+  - =NEW-BODY= (string): the new body as org prose, possibly empty. It
+    holds neither the property drawer nor the =#+title:= line, which
+    stay as they are.
 - *Output*: =(:id :file :diff)=, with =:diff= the =diff -u= of the file
   before and after, as "Show what an edit changed" describes.
-- *Side effect*: rewrites the file on disk.
-- *Discipline*: replaces the body elements before the first
-  heading. There is no merge, no append. If you want to add to
-  existing content there, read it first, concatenate, and call
-  this with the result.
+- *Side effect*: saves the file.
+- *Errors*: those of the write boundary, =sns-roam--update-section=.
+- *Discipline*: replaces the body elements before the first heading.
+  It never merges or appends. To add to that content, read it first,
+  join the new text to it, and call this with the result.
 
 ** Implementation
 
-This is the first of the /composed/ write primitives. Rather than
-poke the buffer imperatively, body mutations are expressed as a
-*pure transform* over the note's =section= AST, handed to a single
-shared write boundary. Three layers:
+Body edits are pure transforms over the note's =section= AST, handed
+to one write boundary. Three layers:
 
-1. =sns-roam--map-children= — a pure =(section -> section)= that
-   applies a function to the section's full child list. Operates on
-   the list whole (filter to keep, append to add); never slices
-   parsed nodes into sublists. No I/O.
-2. =sns-roam--update-section=: the *one* effect boundary every
-   mutation of the first section goes through. It reads, parses,
-   applies a pure section transform, writes only the children the
-   transform changed, and saves. See "Write only what changed" below.
-3. =sns-roam-set-body= et al. — thin shells: a pure transform
-   composed through the boundary.
+1. =sns-roam--map-children=: a pure =(section -> section)= that
+   applies a function to the section's full child list. It filters
+   the list to keep children and appends to add them, and never
+   slices parsed nodes into sublists. No I/O.
+2. =sns-roam--update-section=: the one effect boundary every edit of
+   the first section goes through. Its contract follows.
+3. =sns-roam-set-body= and the other edit primitives: each passes a
+   pure transform through the boundary.
 
-=set-body= keeps its string interface (callers pass prose, not AST);
-internally the prose is parsed to body elements and those *replace*
-the existing body. Drawer and =#+title:= are never touched.
+=set-body= takes a string, because callers pass prose, not AST. It
+parses the prose into body elements, and those replace the existing
+body. The drawer and =#+title:= are never touched.
+
+The write boundary, =sns-roam--update-section=, keeps this contract:
+
+- *Input*: OPERATION, the symbol of the public function that called,
+  such as =sns-roam-insert-element=. ID, the roam node UUID.
+  SECTION-FN, a pure function from the note's first section to the
+  new section.
+- *Output*: =(:id :file :diff)=. =:diff= is the =diff -u= of the file
+  as it was on disk before the call and as the save left it, or =""=
+  when the file did not change.
+- *Side effects*: visits the file with =find-file-noselect=, edits the
+  buffer and saves it. It writes only the children whose text
+  changed, as "Write only what changed" describes. Every child
+  SECTION-FN left alone, and every headline after the section, keeps
+  the text the owner typed. The save also writes edits the owner had
+  not saved, so the diff shows them too.
+- *Narrowing*: the edit parses and changes all of a note the owner
+  has narrowed. Afterwards the narrowing covers the same text, grown
+  or shrunk only by what the edit changed inside it. A refused edit
+  leaves the narrowing as it was.
+- *Errors*: =sns-roam-unknown-id= and =sns-roam-missing-file= before
+  any buffer is visited. Then, before anything is written:
+  - =sns-roam-malformed-note= with =:missing section= when the note
+    has no first section.
+  - Any error SECTION-FN raises.
+  - =sns-roam-unsupported-element= when org prints a kept element as
+    other text once its blank lines change.
+  - =sns-roam-reparse-mismatch= when the edits would not read back as
+    planned.
+  Each of these gains =:id=, =:file= and =:operation=, and the buffer
+  is left as it was. After the save, =sns-roam-diff-failure= when
+  =diff= fails.
 
 #+begin_src emacs-lisp
 (defun sns-roam--section-header-p (element)
@@ -872,27 +918,24 @@ Returns (:id :file). Errors loudly on unknown ID or malformed file."
 ** Discipline notes
 
 - *Pure transform, one effect boundary.* The body operation is a
-  pure =(section -> section)=; the only I/O lives in
-  =sns-roam--update-section=. Every future body primitive (append,
-  promote, merge) composes the same way — the module composes
-  transforms rather than accreting buffer-poking procedures.
-- *Header preserved structurally, not by byte-position.* The
-  transform =seq-filter='s header furniture and re-prepends the new
-  body; no reliance on cursor positions or =delete-region=. It
-  operates on the child list as a whole (never slicing parsed nodes
-  into sublists — see the warning on =sns-roam--map-children=).
-- *Empty body is valid.* =""= parses to nil → an empty body.
-- *Return shape changed* from =t= to =(:id :file)= for provenance
-  parity with the other mutators.
+  pure =(section -> section)=, and the only I/O is in
+  =sns-roam--update-section=. Every body primitive composes the same
+  way, so the module composes transforms and has no procedures that
+  edit the buffer directly.
+- *Header kept by structure, not by position.* The transform keeps
+  the header furniture with =seq-filter= and appends the new body
+  after it, with no cursor positions or =delete-region=. It works on
+  the full child list and never slices parsed nodes into sublists, as
+  the warning on =sns-roam--map-children= explains.
+- *An empty body is valid.* =""= parses to nil, which gives an empty
+  body.
 
 * Write only what changed
 
 An edit through the API changes only the elements it was asked to
-change. On 2026-11-11 a =replace-element= on a note's intro paragraph
-also rewrote =|a|b|= as =| a | b |=, =+  item one= as =- item one=,
-and a table under an untouched headline (issue #14). The write printed
-every node of the note in org's form, so each element the owner had
-typed in another form changed.
+change. A table typed as =|a|b|=, a list item typed as =+  item one=
+and a table under an untouched headline all keep their text. Org
+prints each of them in another form.
 
 ** Contract
 
@@ -902,8 +945,8 @@ typed in another form changed.
   =(:blank-lines-end P :end E :text TEXT)=, last in the buffer first.
   The buffer text from B, or from where the blank lines ending at P
   begin, to E becomes TEXT.
-- *Kept*: a new child is unchanged when a parsed child at or after the
-  last kept one has the same =:begin= and the same =org-ml-to-string=
+- *Kept*: a new child is unchanged when a parsed child after the last
+  kept one has the same =:begin= and the same =org-ml-to-string=
   text. Its typed text stays in the buffer and nothing is written
   there. A transform copies the children it leaves alone, and the
   copies keep the parse's =:begin= and =:end=.
@@ -914,17 +957,22 @@ typed in another form changed.
   end of the kept child before it.
 - *Blank lines*: a new child that differs from its parsed child only
   in =:post-blank= is kept too. Its typed text stays, and only the
-  blank lines after its last non-blank line change (issue #17). The
-  edit after it carries =:blank-lines-end E=, the child's =:end=, in
-  place of =:begin=, because where those blank lines start is a buffer
-  fact. Its text starts with the blank lines =org-ml-to-string= prints
-  for the new =:post-blank=, followed by the run's text, if any.
+  blank lines after its last non-blank line change. The edit after it
+  carries =:blank-lines-end E=, the child's =:end=, in place of
+  =:begin=, because where those blank lines start is a buffer fact.
+  Its text starts with the blank lines =org-ml-to-string= prints for
+  the new =:post-blank=, followed by the run's text, if any.
 - *Text*: the only text an edit carries is =org-ml-to-string= of new
   nodes, and its bounds are positions the parse gave. A child the
   transform changed in more than its blank lines, such as a drawer
   with a new property, is written in org's form.
 - *Headlines*: the edits cover the first section only, so headlines
   after it are never written.
+- *Errors*: =sns-roam-unsupported-element= with =:type= when org
+  prints a kept element as other text once it has blank lines, so it
+  cannot keep its typed text. =sns-roam-reparse-mismatch= when the
+  edits, made on a copy of the buffer, would not read back as the new
+  section.
 
 ** Implementation
 
@@ -1151,7 +1199,7 @@ missing line break."
   text of =|a|b|= and its copy are both =| a | b |=, so the copy is
   kept, and the buffer keeps =|a|b|=.
 - *AST-based.* No step edits the note as raw text. The edits replace
-  whole parsed children with printed nodes.
+  parsed children with printed nodes.
 - *Checked before written.* =sns-roam--check-edits= makes the edits
   on a copy and parses it first. Every primitive gets the check, so an
   edit org would read back differently, for whatever reason, raises
@@ -1161,16 +1209,15 @@ missing line break."
   separator =org-ml-to-string= would print between the two elements.
 - *Narrowed buffers.* An edit parses and changes all of a note the
   owner has narrowed, and leaves the narrowing on the same text,
-  grown or shrunk only by what the edit changed inside it (issue
-  #12). A refused edit leaves the narrowing as it was.
+  grown or shrunk only by what the edit changed inside it. A refused
+  edit leaves the narrowing as it was.
 
 * Show what an edit changed
 
 Each primitive that edits an existing note returns =:diff=, a unified
-diff of the note's file before and after the edit (slice 24). On
-2026-11-10 =sns-roam-replace-element= replaced a two-line paragraph
-with a one-line one and returned success, and only a manual =diff=
-showed the lost line (issue #10). The diff shows such a loss at once.
+diff of the note's file before and after the edit. An edit that loses
+a line still returns success, and the diff shows the lost line at
+once.
 
 ** Contract
 
@@ -1178,7 +1225,7 @@ showed the lost line (issue #10). The diff shows such a loss at once.
   the edit.
 - *Output*: the output of =diff -u=, whose two headers both name the
   note's file. An edit that changes nothing gives =""=.
-- *Failure*: a =diff= exit status other than 0 or 1 raises
+- *Errors*: a =diff= exit status other than 0 or 1 raises
   =sns-roam-diff-failure= with =:status=, =:output= and =:file=. A
   missing =diff= program raises Emacs's own =file-missing=.
 - *Requires*: the system =diff=, which macOS and Linux have.
@@ -1235,45 +1282,49 @@ exit status gives."
 
 * Mutate: append a relationship link
 
-Append a link from one note to another — the core Zettelkasten act
-of connecting ideas as you spot the connection. The link is added
-as a new body paragraph: a relationship sentence with an inline
-=[[id:...]]= link, so the connection carries its reasoning (per the
-claim-graph design — links are statements, not decoration).
+Append a link from one note to another, which is how a Zettelkasten
+connects two ideas. The link goes in a new body paragraph, a sentence
+with an inline =[[id:...]]= link, so the connection carries its
+reasoning. A link is a statement, not decoration.
 
-One-directional: org-roam provides backlinks for free, so the
-reverse direction is discoverable without a second physical link.
+The link goes one way. org-roam provides backlinks, so the reverse
+direction is found without a second link.
 
 ** Contract
 
 - *Input*:
-  - =FROM-ID= (string) — the note gaining the link. Loud failure if unknown.
-  - =TO-ID= (string) — the link target. Loud failure if unknown.
-  - =LABEL= (string) — the link's display text.
-  - =BEFORE= (string) — prose before the link in the paragraph.
-  - =AFTER= (string) — prose after the link (e.g. =". "=, trailing
-    clause, or full stop). Lets the link sit anywhere in a sentence
-    and keeps punctuation honest, rather than forcing the link to the
-    end. Pass =""= for nothing after.
-- *Output*: =(:from :to :file :diff)=.
-- *Side effect*: appends one paragraph to FROM-ID's body.
-- *Discipline*: existing content is untouched (additive only). Both
-  endpoints validated before any mutation. The primitive is *dumb* —
-  it does not check whether the link already exists; that policy
-  belongs to the orchestrating skill (=roam-distill=), keeping the
-  primitive a single honest mutation.
+  - =FROM-ID= (string): the note gaining the link.
+  - =TO-ID= (string): the link target.
+  - =LABEL= (string): the link's display text.
+  - =BEFORE= (string): the prose before the link in the paragraph.
+  - =AFTER= (string): the prose after the link, such as =". "=, a
+    trailing clause or a full stop. It lets the link sit anywhere in
+    a sentence with its punctuation right. Pass =""= for nothing after.
+- *Output*: =(:from :to :file :diff)=, with =:diff= as the write
+  boundary gives it.
+- *Side effect*: appends one paragraph to FROM-ID's body and saves the
+  file.
+- *Errors*: =sns-roam-unknown-id= or =sns-roam-missing-file= for
+  TO-ID, before anything else, then those of the write boundary for
+  FROM-ID.
+- *Discipline*: existing content keeps its text. Both endpoints are
+  checked before the note changes. The primitive does not check
+  whether the link exists already. That policy belongs to the skill
+  that calls it, =roam-distill=, so the primitive makes one change
+  only.
 
 ** Implementation
 
-A pure body transform (append one paragraph) composed through
-=sns-roam--update-section=. No buffer-poking; the paragraph is built
-as an AST node and appended to the body element list. =BEFORE= and
-=AFTER= bracket the link so the caller controls phrasing and
-punctuation; empty strings are dropped so no stray empty text nodes
-appear. The paragraph goes after the section's last child, spaced by
-=sns-roam--insert-beside=. That child keeps at least one blank line,
-and the paragraph takes the blank lines the child had. A link added
-above a headline therefore ends with its own blank line.
+A pure body transform that appends one paragraph, passed through
+=sns-roam--update-section=. The paragraph is built as an AST node and
+added to the child list. No code edits the buffer directly.
+=BEFORE= and =AFTER= surround the link, so the caller controls
+phrasing and punctuation. Empty strings are dropped, so the paragraph
+holds no empty text nodes. The paragraph goes after the section's
+last child, spaced by =sns-roam--insert-beside=. That child keeps at
+least one blank line, and the paragraph takes the blank lines the
+child had. A link added above a headline therefore ends with its own
+blank line.
 
 #+begin_src emacs-lisp
 (defun sns-roam-append-link (from-id to-id label before after)
@@ -1308,25 +1359,22 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file
 
 ** Discipline notes
 
-- *Additive, not surgical.* This appends; it never rewrites existing
-  elements. Whole-element replacement is =sns-roam-replace-element=
-  below; both compose through =sns-roam--update-section=.
-- *One-directional by design.* Backlinks cover the reverse. A
-  bidirectional variant (for symmetric relations like "contradicts")
-  would be a separate, explicit primitive.
+- *Additive.* This appends and never rewrites an existing element.
+  =sns-roam-replace-element= below replaces one element, and both
+  compose through =sns-roam--update-section=.
+- *One way.* Backlinks cover the reverse direction.
 
 * Read: the body elements of a node
 
 Return the body elements before a note's first heading, as parsed
 org-ml nodes, so Claude can show the text an edit will replace. The
-roam-distill transform flow calls this before =replace-element= or
-=set-body=. Reading the file and splitting on blank lines guesses at
-paragraph boundaries that org decides (issue #7).
+roam-distill skill calls this before =replace-element= or =set-body=.
+Org decides where a paragraph ends, so a caller reads the elements
+here and never splits the file on blank lines.
 
 ** Contract
 
-- *Input*: =ID= (string), the roam node UUID. Loud failure if
-  unknown.
+- *Input*: =ID= (string), the roam node UUID.
 - *Output*: plist =(:id ID :file FILE :elements NODES)=.
   - =:elements=: the section's children with the header furniture
     (property drawer, =#+= keywords) removed, in buffer order. Nil
@@ -1336,12 +1384,15 @@ paragraph boundaries that org decides (issue #7).
   =find-file-noselect=, as =sns-roam--update-section= visits it, so a
   buffer the owner has open is parsed with its unsaved edits, and the
   text returned is the text the following edit acts on. Nothing is
-  saved and the buffer's modified flag is left as it was.
+  saved and the buffer's modified flag is left as it was. A note the
+  owner has narrowed is read in full.
+- *Errors*: =sns-roam-unknown-id= when ID names no node, and
+  =sns-roam-missing-file= when its file has moved since the last sync.
 
 ** Implementation
 
 The read mirrors the write boundary: same ID resolution, same buffer,
-same header predicate. It filters the child list whole, as the
+same header predicate. It filters the full child list, as the
 warning on =sns-roam--map-children= asks.
 
 #+begin_src emacs-lisp
@@ -1383,32 +1434,36 @@ loudly on an unknown ID."
 
 * Mutate: replace a body element
 
-Surgically replace one body element — rewrite a claim's paragraph,
-swap a stale sentence — without reproducing the rest of the body
-(which whole-body =set-body= would force). The element to change is
-identified by a predicate; exactly one must match, so an ambiguous
-edit never silently hits the wrong place.
+Replace one body element, such as a claim's paragraph or a stale
+sentence, without writing out the rest of the body as =set-body=
+needs. A predicate picks the element, and exactly one must match, so
+an ambiguous edit never changes the wrong place.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam node UUID. Loud failure if unknown.
-  - =PRED= (function) — a unary predicate on an org-ml node. Must
-    match *exactly one* body element; zero or many is a loud error.
-  - =NEW-ELEMENT= (org-ml node) — the replacement, built via
+  - =ID= (string): the roam node UUID.
+  - =PRED= (function): a unary predicate on an org-ml node. It must
+    match exactly one child of the note's first section.
+  - =NEW-ELEMENT= (org-ml node): the replacement, built with
     =org-ml-build-*=.
 - *Output*: =(:id :file :diff)=.
-- *Side effect*: replaces the matched element in FROM's body.
-- *Discipline*: unique-handle — never guesses among multiple matches.
-  AST in, AST out; no string-munging. Replaces an element *whole*; it
-  does not edit *within* an element (that is a deeper, separate need).
+- *Side effect*: replaces the matched element in ID's body and saves
+  the file.
+- *Errors*: =sns-roam-match-count= with =:count= when PRED matches no
+  element or several, and those of the write boundary. The file is
+  unchanged.
+- *Discipline*: one match or an error, never a guess among several.
+  AST in, AST out, with no string editing. It replaces an element
+  entire and does not edit inside one.
 
 ** Implementation
 
-A pure transform — match by predicate, assert uniqueness, map the
-match to NEW-ELEMENT — composed through =sns-roam--update-section=.
-The predicate runs over the whole section but naturally targets body
-elements (header furniture rarely matches a content predicate).
+A pure transform matches by predicate, checks that exactly one
+element matched, and maps that match to NEW-ELEMENT. It passes
+through =sns-roam--update-section=. The predicate runs over every
+child of the section, the property drawer and keywords included,
+though a predicate on content rarely matches them.
 
 #+begin_src emacs-lisp
 (defun sns-roam-replace-element (id pred new-element)
@@ -1430,48 +1485,59 @@ through `sns-roam--update-section'. Returns (:id :file)."
 
 ** Discipline notes
 
-- *Unique-handle, loud failure.* Zero or many matches errors rather
-  than guessing — the wrong-element edit does not exist as an outcome.
-- *Whole-element only.* Replaces a matched element entirely. Editing
-  inside an element (fix one word in a paragraph) is a deeper need not
-  served here; build the new element and replace.
-- *Composes upward.* Merge/split flows are =replace-element= +
-  =append-link= + =create-node=, orchestrated by the skill.
+- *One match, loud failure.* No match, or several, raises, so an edit
+  to the wrong element cannot happen.
+- *Element by element.* It replaces a matched element entire. To fix
+  one word in a paragraph, build the new paragraph and replace the old
+  one.
 
 * Mutate: insert a body element next to another
 
 Add one element beside an existing body element, and leave every
 other element as it was. A history line in a reference note is the
-usual case. =set-body= would make Claude reproduce every paragraph
-for a one-element change. On 2026-11-10 a rewrite of one paragraph
-dropped a line (issues #8 and #10).
+usual case. =set-body= would make Claude write out every paragraph
+for a one-element change. A rewritten paragraph can lose a line.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string): the roam node UUID. Loud failure if unknown.
+  - =ID= (string): the roam node UUID.
   - =PRED= (function): a unary predicate on an org-ml node. It sees
     only body elements, never the property drawer or =#+= keywords.
-    It must match *exactly one*; zero or many is a loud error and the
-    file is unchanged.
+    It must match *exactly one*.
   - =NEW-ELEMENT= (org-ml paragraph): the element to add, built via
-    =org-ml-build-paragraph=. Anything else is a loud error before
-    anything is written, because a list beside a list would merge.
-    Its =:post-blank= is set by the call.
+    =org-ml-build-paragraph=. Anything else is refused, because a list
+    beside a list would merge. Its =:post-blank= is set by the call.
   - =AFTER= (optional): non-nil inserts after the anchor; nil
     inserts before it.
-- *Output*: =(:id :file :diff)=.
-- *Side effect*: adds NEW-ELEMENT to the body of ID's file.
+- *Output*: =(:id :file :diff)=, as the write boundary returns it.
+- *Side effect*: adds NEW-ELEMENT to the body of ID's file and saves
+  it.
 - *Spacing*: no gap shrinks, because org ends some elements, such as
   footnote definitions, only at two blank lines. The element in front
-  of the new paragraph keeps its trailing blank lines, at least one.
-  The new paragraph has one blank line after it when a body element
+  of the new paragraph keeps its trailing blank lines, at least one,
+  unless it is header furniture, which is left as it was. The new
+  paragraph has one blank line after it when a body element
   follows, and otherwise the anchor's old trailing lines, so none
   appears before a first headline that had none.
 - *Reparse check*: before anything is written, the planned section is
   printed and parsed again. Its body elements must match the planned
-  ones by type and trimmed text, or the call raises an =sns-roam:=
-  error and the file is unchanged.
+  ones by type and trimmed text.
+- *Errors*: each is raised before anything is written, so the file is
+  unchanged.
+  - =sns-roam-unsupported-element= with =:type= and
+    =:operation sns-roam-insert-element= when NEW-ELEMENT is not a
+    paragraph.
+  - =sns-roam-match-count= with =:count= and
+    =:operation sns-roam-insert-element= when PRED matches no body
+    element or several.
+  - =sns-roam-reparse-mismatch= with =:planned=, =:actual= and =:file=
+    when the planned section fails the reparse check.
+  - Those of the write boundary, with the keys its contract gives:
+    =sns-roam-unknown-id=, =sns-roam-missing-file=,
+    =sns-roam-malformed-note=, =sns-roam-unsupported-element= when org
+    prints the anchor as other text once its blank lines change, and
+    =sns-roam-diff-failure= after the save.
 
 ** Implementation
 
@@ -1479,9 +1545,9 @@ Three pure functions and a shell. =sns-roam--insert-beside= sets the
 spacing over the full child list, as the warning on
 =sns-roam--map-children= asks. =sns-roam--check-reparse= compares the
 planned body with what org reads back from its text.
-=sns-roam--insert-into-section= computes the new section from the
-old one: it rejects a non-paragraph, finds the unique anchor among
-the body elements, places the paragraph and checks the result.
+=sns-roam--insert-into-section= computes the new section from the old
+one. It rejects a non-paragraph, finds the unique anchor among the
+body elements, places the paragraph and checks the result.
 =sns-roam-insert-element= passes that calculation through
 =sns-roam--update-section=.
 
@@ -1587,14 +1653,14 @@ Returns (:id :file)."
   change, and only from 0 to 1.
 - *Paragraphs only.* History lines are paragraphs, and a list beside
   a list would merge.
-- *Body only.* Content under a headline is out of reach (issue #2).
+- *Body only.* Content under a headline is out of reach.
 
 * Read: where a history line goes in a reference note
 
 Find the paragraph a new dated history line goes beside, so Claude
-can pass it to =insert-element= without deciding the place itself. On
-2026-11-09, with no such call, Claude read the note files directly and
-rewrote each body with =set-body= (issue #9).
+can pass it to =insert-element= without choosing the place itself.
+Claude never reads the note's file to choose the place, and never
+rewrites the body with =set-body= to add a line.
 
 The supported layout is the owner's reference note: paragraphs only,
 no headings, tables or lists. A "Current state:" paragraph, an "Open:"
@@ -1604,7 +1670,7 @@ per history line, newest first, each starting =YYYY-MM-DD:=.
 ** Contract
 
 - *Input*:
-  - =ID= (string): the roam node UUID. Loud failure if unknown.
+  - =ID= (string): the roam node UUID.
   - =DATE= (string): the event's date as =YYYY-MM-DD=.
 - *Output*: plist =(:id ID :file FILE :anchor TEXT :after BOOL)=.
   - TEXT is the trimmed text of the first history line dated on or
@@ -1613,11 +1679,19 @@ per history line, newest first, each starting =YYYY-MM-DD:=.
     =t=: the new line goes at the end.
 - *Side effect*: none on disk. The note is parsed from the buffer
   =find-file-noselect= returns, as =sns-roam-body-elements= reads it,
-  headings included.
-- *Refusals*: an =sns-roam:= error when DATE is not =YYYY-MM-DD=, the
-  note has a heading or a body element that is not a paragraph, the
-  body is empty, the dated lines are not one run at the end of the
-  body, newest first, or TEXT appears in two paragraphs.
+  headings included. A note the owner has narrowed is read in full.
+- *Errors*: =sns-roam-unknown-id= and =sns-roam-missing-file= for ID.
+  The others carry =:id= and =:file=:
+  - =sns-roam-bad-date= with =:date= when DATE is not =YYYY-MM-DD=.
+  - =sns-roam-unsupported-element= with =:type= and
+    =:operation sns-roam-history-anchor= when the note has a heading,
+    with its =:title=, or a body element that is not a paragraph.
+  - =sns-roam-history-layout= with =:reason no-paragraphs= when the
+    body is empty, =not-one-run= when the dated lines are not one run
+    at the end of the body, and =not-newest-first= with the two
+    =:dates= out of order.
+  - =sns-roam-match-count= with =:count=, =:operation= and =:anchor=
+    when TEXT appears in two paragraphs.
 
 ** Implementation
 
@@ -1737,26 +1811,27 @@ YYYY-MM-DD, and a note outside the reference layout."
 
 * Mutate: set a section-level keyword
 
-Set or replace a =#+KEY: value= keyword in the file's first
-section. =#+title:= is the canonical use, but the primitive is
-generic — works for any single-valued section keyword.
+Set or replace a =#+KEY: value= keyword in the file's first section.
+=#+title:= is the usual use, and the primitive works for any keyword
+that holds one value.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam node UUID. Loud failure if unknown.
-  - =KEY= (string) — keyword name, *uppercase, without leading*
-    =#+= or trailing colon (so =TITLE=, not =#+title:=). Org's
-    parser stores keyword keys uppercased; we follow that.
-  - =VALUE= (string) — the new value.
+  - =ID= (string): the roam node UUID.
+  - =KEY= (string): the keyword name, *uppercase, without the leading*
+    =#+= or the trailing colon, so =TITLE=, not =#+title:=. Org's
+    parser stores keyword keys in upper case, and the call follows it.
+  - =VALUE= (string): the new value.
 - *Output*: =(:id :file :diff)=.
-- *Side effect*: rewrites the file on disk.
+- *Side effect*: saves the file.
+- *Errors*: those of the write boundary, =sns-roam--update-section=.
 - *Discipline*:
-  - If the keyword is already present, replaces its value.
-  - If absent, appends a new keyword as the section's last
-    header element (after the property drawer and any existing
-    keywords).
-  - Idempotent: same KEY+VALUE twice writes the same bytes.
+  - If the keyword is present, the call replaces its value.
+  - If it is absent, the call adds a new keyword as the section's last
+    child, after any body elements before the first heading.
+  - Idempotent: setting the same KEY and VALUE again leaves the file
+    as it was.
 
 ** Implementation
 
@@ -1800,31 +1875,35 @@ the =#+title:= line and the file name, and nothing else in the file.
 
 * Mutate: rename a node's file on disk
 
-Rename the =.org= file backing a roam node, preserving the
-timestamp prefix and updating the visiting buffer (if any) so
-nothing stales out. The roam DB picks up the new path on next
-sync.
+Rename the =.org= file of a roam node, keep its timestamp prefix, and
+point any buffer visiting the file at the new path. The roam database
+picks up the new path on the next sync.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam UUID. Loud failure if unknown.
-  - =NEW-SLUG= (string) — the new filename body (between
-    timestamp prefix and =.org= extension). Snake_case
-    expected; we don't sanitise — caller's responsibility.
-- *Output*: the new absolute file path on success.
-- *Side effect*:
-  - File renamed on disk.
-  - Any buffer visiting the old path is updated via
-    =set-visited-file-name= so it now visits the new path.
+  - =ID= (string): the roam UUID.
+  - =NEW-SLUG= (string): the new body of the file name, between the
+    timestamp prefix and the =.org= extension. Snake case is expected.
+    The call does not clean it, which is the caller's job.
+- *Output*: the new absolute file path.
+- *Side effects*:
+  - The file is renamed on disk.
+  - Any buffer visiting the old path visits the new one, through
+    =set-visited-file-name=.
+- *Errors*:
+  - =sns-roam-unknown-id= and =sns-roam-missing-file= for ID.
+  - =sns-roam-malformed-note= with =:missing roam-filename=, =:id=,
+    =:file= and =:name= when the file name lacks the
+    =NNNNNNNNNNNNNN-= prefix.
+  - =sns-roam-file-exists= with =:id= and =:path= when a file has the
+    new name, the note's own file included.
 - *Discipline*:
-  - Preserves the existing timestamp prefix verbatim. If the
-    filename doesn't have a recognisable =NNNNNNNNNNNNNN-= prefix,
-    error loudly rather than guess.
-  - Errors if the destination filename already exists.
-  - Does *not* update =#+title:= or any properties — pure
-    filename operation. Composite renames live in
-    =sns-roam-rename=.
+  - Keeps the timestamp prefix verbatim. A file name without one is
+    an error, never a guess.
+  - Never overwrites a file.
+  - Does *not* update =#+title:= or any property: it renames the file
+    only. =sns-roam-rename= changes both.
 
 ** Implementation
 
@@ -1867,28 +1946,29 @@ or the destination already exists."
 
 * Mutate: rename a node (title + filename together)
 
-Composite operation: rewrite =#+title:= and rename the file's
-slug to match. Slug derivation uses org-roam's own
-=org-roam-node-slug= so the result is byte-identical to what a
-fresh capture would have produced.
+Rewrite =#+title:= and rename the file's slug to match. The slug comes
+from org-roam's own =org-roam-node-slug=, so the file name is the one
+a fresh capture would give.
 
 ** Contract
 
 - *Input*:
-  - =ID= (string) — the roam UUID.
-  - =NEW-TITLE= (string) — the new title.
+  - =ID= (string): the roam UUID.
+  - =NEW-TITLE= (string): the new title.
 - *Output*: plist =(:id ID :title NEW-TITLE :file NEW-PATH :diff DIFF)=,
-  where DIFF is the =#+title:= change. When the new file name exists,
+  where DIFF is the =#+title:= change, labelled with the file's name
+  before the rename.
+- *Side effects*: the title is rewritten in the file, the file is
+  renamed, and any visiting buffer follows it.
+- *Errors*: those of =sns-roam-set-keyword=, then
+  =sns-roam-unknown-id= when the node is gone after the title write,
+  then those of =sns-roam-rename-file=. When the new file name exists,
   the new title stays written and =sns-roam-file-exists= is raised, so
   no diff is returned.
-- *Side effects*: title rewritten in file; file renamed; any
-  visiting buffer updated.
-- *Discipline*: not transactional. Title write happens first,
-  then file rename. If the rename fails (e.g. destination exists),
-  the title is already rewritten — caller can retry the rename
-  with a different slug or rename by hand. We accept this because
-  the alternative (rollback the title write) doubles the failure
-  surface for marginal benefit.
+- *Discipline*: not transactional. The title is written first, then
+  the file renamed. If the rename fails, the title is already
+  rewritten, and the caller can retry the rename with another slug or
+  rename by hand. The call never rolls the title back.
 
 ** Implementation
 
@@ -1914,72 +1994,69 @@ the file's name before the rename."
 
 Create a fresh =.org= file in =org-roam-directory= with a
 generated UUID, a timestamp-prefixed filename, and the standard
-roam header (=:PROPERTIES:= drawer + =#+title:= keyword). The new
-node is immediately visible to =org-roam-node-list= and the rest
-of the bridge primitives.
+roam header, a =:PROPERTIES:= drawer and a =#+title:= keyword. The
+new node is at once visible to =org-roam-node-list= and the rest of
+the bridge primitives.
 
 ** Contract
 
 - *Input*:
-  - =TITLE= (string) — human-readable title.
-  - =KIND= (string) — one of "permanent" / "literature" /
-    "fleeting", or any other string the caller treats as a kind.
-    No validation — caller's responsibility to use a recognised
-    value. (Validation belongs in a higher layer if at all.)
-  - =ELEMENTS= (list of org-ml AST nodes, optional) — body
-    content as pre-built AST. Each element is something
-    =org-ml-build-*= produced (paragraph, headline, plain-list,
-    etc.). Pass =nil= for an empty-body node. Callers building
-    from a string of pre-formatted org should parse it via
-    =org-ml-parse-this-buffer= first.
-  - =ID= (string, optional) — pre-assigned UUID. If absent, a
-    fresh one is generated via =org-id-new=. A caller that links
-    new notes to each other passes IDs minted beforehand.
-  - =ALIASES= (list of strings, optional) — written as
-    =:ROAM_ALIASES:= in the property drawer when non-empty.
-  - =CREATED-TIME= (emacs internal time value, optional) — when
-    non-nil, used in place of =current-time= for both the
-    =:CREATED:= property and the filename's 14-digit prefix.
-    The two outputs are formatted from the *same* time value, so
-    they're guaranteed consistent. Pass an internal time value
-    (e.g. from =current-time=, =encode-time=,
-    =parse-iso8601-time-string=) — never a pre-formatted string.
-    Callers that omit it get the current time.
+  - =TITLE= (string): the title people read.
+  - =KIND= (string): "permanent", "literature", "fleeting" or any
+    other string the caller treats as a kind. The call does not
+    check it, and the caller uses a value it recognises.
+  - =ELEMENTS= (list of org-ml AST nodes, optional): the body, as
+    nodes =org-ml-build-*= produced, such as paragraphs, headlines or
+    plain lists. Pass =nil= for an empty body. A caller with a string
+    of org parses it with =org-ml-parse-this-buffer= first.
+  - =ID= (string, optional): a UUID assigned in advance. Without it,
+    =org-id-new= generates one. A caller that links new notes to each
+    other passes IDs it minted beforehand.
+  - =ALIASES= (list of strings, optional): written as =:ROAM_ALIASES:=
+    in the property drawer when non-empty.
+  - =CREATED-TIME= (Emacs internal time value, optional): when
+    non-nil, used in place of =current-time= for both the =:CREATED:=
+    property and the filename's 14-digit prefix. Both are formatted
+    from the same time value, so they agree. Pass an internal time
+    value, such as one from =current-time=, =encode-time= or
+    =parse-iso8601-time-string=, never a formatted string. Callers
+    that omit it get the current time.
   - =SLUG-SOURCE= (string, optional): slugified for the filename in
-    place of TITLE. Use it to decouple the filename slug from a
-    title that carries extra detail (e.g. an appended date), so the
-    file stays cleanly named while the title remains human.
-- *Output*: plist =(:id ID :title TITLE :file PATH)=.
+    place of TITLE. It keeps the file name plain when the title
+    carries extra detail, such as an appended date.
+- *Output*: plist =(:id ID :title TITLE :file PATH)=, with no =:diff=.
 - *Side effects*:
-  - New file written under =org-roam-directory= via
-    =write-region= over a =with-temp-buffer=, so org-roam's
-    autosync hook never sees it.
-  - The new file is then indexed with =org-roam-db-update-file=,
-    which records its node and its links in the database. Every
-    edit primitive resolves an ID through the database, so a batch
-    can edit, link and expand the new node straight away, with no
-    =org-roam-db-sync= first (issue #6). The links the body holds
-    show as backlinks on their targets at once.
-  - When the destination already exists, the function errors
-    before it writes or indexes anything, so the existing file and
-    its rows stay as they were and no row names the new ID.
-  - When the database already holds ID for another file, the
-    function errors before it writes anything. org-roam would only
-    warn on the duplicate and keep resolving ID to the old file.
-  - After indexing, the function errors unless ID resolves to the
-    new file, naming the ID and both paths.
+  - The new file is written under =org-roam-directory= with
+    =write-region= from a =with-temp-buffer=, so org-roam's autosync
+    hook never sees it.
+  - The new file is then indexed with =org-roam-db-update-file=, which
+    records its node and its links in the database. Every edit
+    primitive resolves an ID through the database, so a batch can
+    edit, link and expand the new node straight away, with no
+    =org-roam-db-sync= first. The links the body holds show as
+    backlinks on their targets at once.
+- *Errors*:
+  - =sns-roam-file-exists= with =:id= and =:path= when the destination
+    exists. The call raises before it writes or indexes anything, so
+    the existing file and its rows stay as they were and no row
+    names the new ID.
+  - =sns-roam-id-conflict= with =:id=, =:registered= and =:path= when
+    the database already holds ID for another file. The call raises
+    before it writes anything. org-roam would only warn on the
+    duplicate and keep resolving ID to the old file.
+  - =sns-roam-index-failure= with =:id=, =:expected= and =:actual=
+    when, after indexing, ID does not resolve to the new file.
 - *Discipline*:
-  - Errors loudly if the destination file already exists. Do not
-    overwrite — collisions almost certainly mean a bug.
-  - Slug derived from SLUG-SOURCE when given, else from TITLE, via
-    =org-roam-node-slugify= for parity with the capture template.
-  - Timestamp prefix uses =current-time= at call site by default;
-    callers passing CREATED-TIME override both the prefix and the
-    drawer property, so one date reaches both. The two timestamp shapes are formatted from
-    the same internal time value via =format-time-string= — no
-    string round-trips, no regex re-parsing.
-  - =:CREATED:= property set to =[YYYY-MM-DD Day HH:MM]= matching
-    the capture template's =%U= form.
+  - Never overwrites a file. A collision means a bug.
+  - The slug comes from SLUG-SOURCE when given, else from TITLE,
+    through =org-roam-node-slugify=, to match the capture template.
+  - The timestamp prefix uses =current-time= by default. CREATED-TIME
+    overrides both the prefix and the drawer property, so one date
+    reaches both. The two timestamps are formatted from the same
+    internal time value with =format-time-string=, with no string
+    round trips and no regex parsing.
+  - The =:CREATED:= property is written =[YYYY-MM-DD Day HH:MM]=, the
+    capture template's =%U= form.
 
 ** Implementation
 
@@ -2104,27 +2181,23 @@ Errors after indexing if ID does not resolve to the new file."
 
 ** Discipline notes
 
-- *AST in, file out.* The whole point of choosing org over text
-  formats is that the AST is the substrate. Callers hand over
-  pre-built =org-ml-build-*= nodes; the function builds the
-  header AST itself and hands the union to =org-ml-to-string=.
-  No string templating in the body. Callers with a string of
-  pre-formatted org parse it with =org-ml-parse-this-buffer= and
-  pass the parsed children.
-- *Section vs sibling-headline split.* The =:PROPERTIES:= drawer
-  and =#+title:= keyword live inside the file's leading
-  =section= element. Body paragraphs and lists belong in that
-  same section. Top-level headlines (=*=) are siblings, not
-  children. The function sorts ELEMENTS into those two buckets
-  on the assumption that paragraphs precede the first headline —
-  if a caller intersperses paragraphs after a headline, those
-  paragraphs become children of that headline (not the leading
-  section), which is what org's structure says they should be
-  anyway.
-- *Caller passes KIND as a string.* No enum, no validation. The
-  taxonomy lives in the user's head, and a single typo in the
-  value should be visible in the file rather than rejected at
-  the API.
+- *AST in, file out.* Org is chosen over plain text formats because
+  the AST is what the code works on. Callers hand over nodes built
+  with =org-ml-build-*=. The function builds the header AST itself and
+  prints the union with =org-ml-to-string=. The body is never built
+  from a string template. Callers with a string of org parse it with
+  =org-ml-parse-this-buffer= and pass the parsed children.
+- *Section and sibling headlines.* The =:PROPERTIES:= drawer and the
+  =#+title:= keyword sit inside the file's leading =section= element.
+  Body paragraphs and lists belong in that same section. Top-level
+  headlines (=*=) are its siblings, not its children. The function
+  sorts ELEMENTS into those two groups and assumes paragraphs come
+  before the first headline. A paragraph a caller puts after a
+  headline becomes a child of that headline, which is where org's
+  structure puts it anyway.
+- *KIND is a plain string.* No enum and no check. The taxonomy is the
+  owner's, and a typo in the value should be visible in the file, not
+  rejected by the API.
 
 * Create: a dated meeting note
 
@@ -2135,20 +2208,22 @@ sns-roam-meeting-note= prompts for the series name.
 ** Contract
 
 - *Input*: =SERIES= (string), the stable series name, such as
-  "alan-smithee-1-1", "pir-prep" or "incident-review". It is trimmed,
-  and an empty name is an error.
+  "alan-smithee-1-1", "pir-prep" or "incident-review". It is trimmed.
 - *Output*: the =sns-roam-create-node= plist =(:id :title :file)=.
 - *Side effects*: the new file is written through
   =sns-roam-create-node= and then visited.
+- *Errors*: a =user-error=, not an =sns-roam-= kind, when the trimmed
+  name is empty. Otherwise those of =sns-roam-create-node=.
 - *Discipline*:
   - The title is SERIES with today's ISO date appended, so each
     occurrence is a distinct node in the node-find picker.
   - The filename slug derives from the bare SERIES, so the file is
-    not double-dated. Org-roam already supplies the timestamp prefix.
-  - KIND is "fleeting": raw meeting capture, to be mined into
-    permanent notes later.
+    not double-dated. =sns-roam-create-node= adds the timestamp
+    prefix.
+  - KIND is "fleeting": raw meeting capture, which the owner mines
+    into permanent notes.
   - It always creates a fresh instance and never finds an existing
-    node, so identical series names never collide.
+    node, so two notes for one series never collide.
 
 ** Implementation
 
