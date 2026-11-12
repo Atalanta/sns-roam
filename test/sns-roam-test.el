@@ -1860,5 +1860,349 @@ hunk lines are left out, and each line loses its leading `-' or `+'."
                          (sns-roam-test--diff-lines (plist-get result :diff)))))
       (org-roam-db-autosync-mode -1))))
 
+;;; --- each Contract against the code ---
+
+(defconst sns-roam-test--source-file
+  (expand-file-name "../src/roam-api.org"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "The literate source whose Contracts the contract tests read.")
+
+(defconst sns-roam-test--write-boundary
+  '(sns-roam--update-section . "those of the write boundary")
+  "The write boundary, and the phrase a Contract inherits its errors by.")
+
+(defconst sns-roam-test--contracts
+  `((sns-roam-find-by-metadata
+     :returns (:id :title :file :tags :aliases) :names () :inherits ())
+    (sns-roam-body-search
+     :returns (:id :title :file :line :point :hit-text) :names () :inherits ())
+    (sns-roam-expand
+     :returns (:nodes :edges)
+     :names (sns-roam-unknown-id sns-roam-missing-file) :inherits ())
+    (sns-roam-excerpt
+     :returns (:id :file :point :text :container-type :outline)
+     :names (sns-roam-unknown-id sns-roam-missing-file
+             sns-roam-no-excerpt-container)
+     :inherits ())
+    (sns-roam--update-section
+     :opening "keeps this contract:$"
+     :returns (:id :file :diff)
+     :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-malformed-note
+             sns-roam-unsupported-element sns-roam-reparse-mismatch
+             sns-roam-diff-failure)
+     :inherits ())
+    (sns-roam-set-property
+     :returns (:id :file :diff)
+     :names (sns-roam-malformed-note) :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-set-body
+     :returns (:id :file :diff)
+     :names () :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-append-link
+     :returns (:from :to :file :diff)
+     :names (sns-roam-unknown-id sns-roam-missing-file)
+     :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-body-elements
+     :returns (:id :file :elements)
+     :names (sns-roam-unknown-id sns-roam-missing-file) :inherits ())
+    (sns-roam-replace-element
+     :returns (:id :file :diff)
+     :names (sns-roam-match-count) :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-insert-element
+     :returns (:id :file :diff)
+     :names (sns-roam-unsupported-element sns-roam-match-count
+             sns-roam-reparse-mismatch sns-roam-unknown-id sns-roam-missing-file
+             sns-roam-malformed-note sns-roam-diff-failure)
+     :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-history-anchor
+     :returns (:id :file :anchor :after)
+     :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-bad-date
+             sns-roam-unsupported-element sns-roam-history-layout
+             sns-roam-match-count)
+     :inherits ())
+    (sns-roam-set-keyword
+     :returns (:id :file :diff)
+     :names () :inherits (,sns-roam-test--write-boundary))
+    (sns-roam-rename-file
+     :returns path
+     :names (sns-roam-unknown-id sns-roam-missing-file sns-roam-malformed-note
+             sns-roam-file-exists)
+     :inherits ())
+    (sns-roam-rename
+     :returns (:id :title :file :diff)
+     :names (sns-roam-unknown-id sns-roam-file-exists)
+     :inherits ((sns-roam-set-keyword . "those of =sns-roam-set-keyword=")
+                (sns-roam-rename-file . "those of =sns-roam-rename-file=")))
+    (sns-roam-create-node
+     :returns (:id :title :file)
+     :names (sns-roam-file-exists sns-roam-id-conflict sns-roam-index-failure)
+     :inherits ())
+    (sns-roam-meeting-note
+     :returns (:id :title :file)
+     :names ()
+     :inherits ((sns-roam-create-node . "those of =sns-roam-create-node="))))
+  "What each public function's Contract in the literate source states.
+Each entry is (FUNCTION :returns KEYS :names KINDS :inherits PAIRS).
+KEYS are the keys of the plist the function returns, in order, or the
+symbol `path' for a function that returns a file name.  KINDS are the
+error kinds the Contract names.  PAIRS are (FUNCTION . PHRASE): the
+Contract states the errors of FUNCTION too, in words containing PHRASE.
+An entry's :opening, when present, is the regexp the Contract text
+starts after, for the write boundary, whose Contract sits in another
+function's section.  The write boundary is private, but every edit
+inherits its Contract.")
+
+(defun sns-roam-test--contract-entry (function)
+  "Return the `sns-roam-test--contracts' plist for FUNCTION."
+  (or (alist-get function sns-roam-test--contracts)
+      (error "sns-roam tests: no Contract entry for %s" function)))
+
+(defun sns-roam-test--contract-text (function)
+  "Return the Contract text for FUNCTION in `sns-roam-test--source-file'.
+The Contract is in the top-level section that defines FUNCTION.  It
+starts after the line \"** Contract\", or after the entry's :opening,
+and ends at the next heading or source block."
+  (with-temp-buffer
+    (insert-file-contents sns-roam-test--source-file)
+    (goto-char (point-min))
+    (unless (re-search-forward
+             (format "^(defun %s " (regexp-quote (symbol-name function))) nil t)
+      (error "sns-roam tests: %s is not defined in the source" function))
+    (re-search-backward "^\\* ")
+    (let ((section-end (save-excursion
+                         (forward-line)
+                         (if (re-search-forward "^\\* " nil t)
+                             (match-beginning 0)
+                           (point-max))))
+          (opening (or (plist-get (sns-roam-test--contract-entry function)
+                                  :opening)
+                       "^\\*\\* Contract$")))
+      (unless (re-search-forward opening section-end t)
+        (error "sns-roam tests: no Contract for %s" function))
+      (buffer-substring-no-properties
+       (point)
+       (if (re-search-forward "^\\*\\|^#\\+begin_src" nil t)
+           (match-beginning 0)
+         (point-max))))))
+
+(defun sns-roam-test--contract-output (function)
+  "Return the *Output* item of FUNCTION's Contract text."
+  (let ((text (sns-roam-test--contract-text function)))
+    (unless (string-match "^- \\*Output\\*" text)
+      (error "sns-roam tests: the Contract for %s has no Output" function))
+    (let ((start (match-beginning 0)))
+      (substring text start (string-match "^- \\*" text (match-end 0))))))
+
+(defun sns-roam-test--kinds-named-in (text)
+  "Return each declared error kind that TEXT writes as =KIND=."
+  (seq-filter (lambda (kind)
+                (string-search (format "=%s=" kind) text))
+              sns-roam--error-kinds))
+
+(defun sns-roam-test--stated-kinds (function)
+  "Return the error kinds FUNCTION's Contract states, with those it inherits."
+  (let ((entry (sns-roam-test--contract-entry function)))
+    (seq-uniq
+     (append (plist-get entry :names)
+             (mapcan (lambda (pair)
+                       (sns-roam-test--stated-kinds (car pair)))
+                     (plist-get entry :inherits))))))
+
+(defun sns-roam-test--library-definitions ()
+  "Return a hash table from each function the library defines to its body.
+Reads the forms of `sns-roam-test--api-file' without evaluating them."
+  (let ((definitions (make-hash-table :test #'eq)))
+    (with-temp-buffer
+      (insert-file-contents sns-roam-test--api-file)
+      (goto-char (point-min))
+      (condition-case nil
+          (while t
+            (let ((form (read (current-buffer))))
+              (when (and (consp form) (eq 'defun (car form)))
+                (puthash (nth 1 form) (nthcdr 2 form) definitions))))
+        (end-of-file nil)))
+    definitions))
+
+(defun sns-roam-test--symbols-in (form)
+  "Return every symbol that occurs in FORM, at any depth."
+  (cond ((symbolp form) (list form))
+        ((consp form) (append (sns-roam-test--symbols-in (car form))
+                              (sns-roam-test--symbols-in (cdr form))))
+        (t nil)))
+
+(defun sns-roam-test--raisable-kinds (function definitions)
+  "Return the error kinds FUNCTION's code can raise, sorted by name.
+DEFINITIONS is `sns-roam-test--library-definitions'.  A kind counts
+when FUNCTION, or a library function it names, calls its signaller
+`sns-roam--signal-KIND', so the count follows every path, taken or
+not, and every function passed by name."
+  (let ((visited nil)
+        (kinds nil)
+        (pending (list function)))
+    (while pending
+      (let ((current (pop pending)))
+        (unless (memq current visited)
+          (push current visited)
+          (dolist (symbol (sns-roam-test--symbols-in (gethash current definitions)))
+            (let ((name (symbol-name symbol)))
+              (cond
+               ((string-prefix-p "sns-roam--signal-" name)
+                (cl-pushnew (intern (concat "sns-roam-"
+                                            (string-remove-prefix
+                                             "sns-roam--signal-" name)))
+                            kinds))
+               ((gethash symbol definitions)
+                (push symbol pending))))))))
+    (sort kinds #'string<)))
+
+(defun sns-roam-test--plist-keys (plist)
+  "Return the keys of PLIST, in order."
+  (cl-loop for (key _value) on plist by #'cddr collect key))
+
+(ert-deftest sns-roam-every-public-function-has-a-contract-entry ()
+  ;; A public function added without an entry fails here, so the
+  ;; comparisons below cover every one.
+  (let ((public (cl-loop for function being the hash-keys
+                         of (sns-roam-test--library-definitions)
+                         when (and (string-prefix-p "sns-roam-" (symbol-name function))
+                                   (not (string-prefix-p "sns-roam--"
+                                                         (symbol-name function))))
+                         collect function)))
+    (should (seq-set-equal-p
+             public
+             (seq-remove (lambda (function)
+                           (string-prefix-p "sns-roam--" (symbol-name function)))
+                         (mapcar #'car sns-roam-test--contracts))))))
+
+(ert-deftest sns-roam-each-contract-states-the-entry-it-is-checked-by ()
+  ;; The Contract names the entry's error kinds and no other, names
+  ;; each contract it inherits from, and gives each return key in its
+  ;; Output item.
+  (dolist (entry sns-roam-test--contracts)
+    (let* ((function (car entry))
+           (text (sns-roam-test--contract-text function))
+           (output (sns-roam-test--contract-output function))
+           (returns (plist-get (cdr entry) :returns)))
+      (should (equal (list function (sort (copy-sequence
+                                           (plist-get (cdr entry) :names))
+                                          #'string<))
+                     (list function (sort (sns-roam-test--kinds-named-in text)
+                                          #'string<))))
+      (dolist (pair (plist-get (cdr entry) :inherits))
+        (should (equal (list function (cdr pair))
+                       (list function
+                             (let ((case-fold-search t))
+                               (and (string-match-p (regexp-quote (cdr pair)) text)
+                                    (cdr pair)))))))
+      (if (eq returns 'path)
+          (should (string-match-p "file path" output))
+        (dolist (key returns)
+          (should (equal (list function key)
+                         (list function
+                               (and (string-match-p
+                                     ;; Org text puts = after a key, which
+                                     ;; the syntax table calls part of a
+                                     ;; symbol, so test the next character.
+                                     (format "%s\\([^-a-z]\\|\\'\\)"
+                                             (regexp-quote (symbol-name key)))
+                                     output)
+                                    key)))))))))
+
+(ert-deftest sns-roam-each-contract-states-the-kinds-its-code-raises ()
+  ;; S25.1: the kinds a Contract states, with those it inherits, are the
+  ;; kinds its function's code can raise.
+  (let ((definitions (sns-roam-test--library-definitions)))
+    (dolist (entry sns-roam-test--contracts)
+      (let ((function (car entry)))
+        (should (equal (list function (sort (sns-roam-test--stated-kinds function)
+                                            #'string<))
+                       (list function (sns-roam-test--raisable-kinds
+                                       function definitions))))))))
+
+(defun sns-roam-test--returned-keys (function result)
+  "Return (FUNCTION KEYS), the keys FUNCTION's RESULT holds.
+KEYS is `path' when RESULT is a file name, as the Contract entries
+write it."
+  (list function (if (stringp result) 'path (sns-roam-test--plist-keys result))))
+
+(defun sns-roam-test--stated-keys (function)
+  "Return (FUNCTION KEYS), the keys FUNCTION's Contract entry states."
+  (list function (plist-get (sns-roam-test--contract-entry function) :returns)))
+
+(ert-deftest sns-roam-each-public-function-returns-the-keys-its-contract-states ()
+  ;; S25.1: a call to each function returns the keys its Contract
+  ;; states, :diff included for each edit of an existing note.
+  (sns-roam-test--with-roam-dir
+    (org-roam-db-autosync-mode 1)
+    (let* ((tide (sns-roam-create-node
+                  "Tide tables" "reference"
+                  (sns-roam--parse-body-elements
+                   "Current state: calm.\n\n2026-11-01: high water at noon.\n")))
+           (moon (sns-roam-create-node
+                  "Moon phases" "permanent"
+                  (sns-roam--parse-body-elements "The moon pulls the sea.\n")))
+           (tide-id (plist-get tide :id))
+           (moon-id (plist-get moon :id))
+           (calls nil))
+      (unwind-protect
+          (cl-flet ((record (function result)
+                      (push (cons function result) calls)
+                      result))
+            (record 'sns-roam-create-node tide)
+            (record 'sns-roam-find-by-metadata
+                    (car (sns-roam-find-by-metadata "Tide")))
+            (let ((hit (record 'sns-roam-body-search
+                               (car (sns-roam-body-search "high water")))))
+              (record 'sns-roam-excerpt
+                      (sns-roam-excerpt tide-id (plist-get hit :point))))
+            (record 'sns-roam-append-link
+                    (sns-roam-append-link moon-id tide-id "tides" "It drives " "."))
+            (record 'sns-roam-expand (sns-roam-expand tide-id))
+            (record 'sns-roam-body-elements (sns-roam-body-elements tide-id))
+            (let ((anchor (record 'sns-roam-history-anchor
+                                  (sns-roam-history-anchor tide-id "2026-11-05"))))
+              (record 'sns-roam-insert-element
+                      (sns-roam-insert-element
+                       tide-id
+                       (lambda (node)
+                         (string= (plist-get anchor :anchor)
+                                  (org-ml-to-trimmed-string node)))
+                       (org-ml-build-paragraph "2026-11-05: low water at six.")
+                       (plist-get anchor :after))))
+            (record 'sns-roam-replace-element
+                    (sns-roam-replace-element
+                     tide-id (sns-roam-test--containing "Current state")
+                     (org-ml-build-paragraph :post-blank 1 "Current state: rough.")))
+            (record 'sns-roam--update-section
+                    (sns-roam--update-section 'sns-roam-test tide-id #'identity))
+            (record 'sns-roam-set-property
+                    (sns-roam-set-property tide-id "KIND" "permanent"))
+            (record 'sns-roam-set-keyword
+                    (sns-roam-set-keyword tide-id "FILETAGS" ":sea:"))
+            (record 'sns-roam-set-body
+                    (sns-roam-set-body moon-id "The moon pulls the sea twice a day."))
+            (record 'sns-roam-rename-file (sns-roam-rename-file moon-id "lunar_phases"))
+            (record 'sns-roam-rename (sns-roam-rename tide-id "Tide charts"))
+            (let ((meeting (sns-roam-meeting-note "pir-prep")))
+              (sns-roam-test--kill-file-buffer (plist-get meeting :file))
+              (record 'sns-roam-meeting-note meeting))
+            ;; Each public function and the write boundary was called.
+            (should (seq-set-equal-p (mapcar #'car sns-roam-test--contracts)
+                                     (delete-dups (mapcar #'car calls))))
+            ;; The two searches return lists; their first result stands
+            ;; for each, and a missing one fails as a nil result.
+            (dolist (call calls)
+              (should (cdr call))
+              (should (equal (sns-roam-test--stated-keys (car call))
+                             (sns-roam-test--returned-keys
+                              (car call) (cdr call))))))
+        (org-roam-db-autosync-mode -1)
+        (dolist (buffer (buffer-list))
+          (let ((file (buffer-file-name buffer)))
+            (when (and file (string-prefix-p (file-truename org-roam-directory)
+                                              (file-truename file)))
+              (with-current-buffer buffer
+                (set-buffer-modified-p nil))
+              (kill-buffer buffer))))))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
