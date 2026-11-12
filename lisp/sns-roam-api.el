@@ -196,7 +196,7 @@ match. Files without an =:ID:= property drawer (i.e. not a roam
 node) are skipped silently. Empty list on no match."
   ;; An empty regexp matches without moving point, so the search loop
   ;; in `sns-roam--search-file' would never end.
-  (when (string-blank-p query)
+  (when (string-empty-p query)
     (sns-roam--signal-empty-query query))
   (let ((files (directory-files-recursively
                 org-roam-directory "\\.org\\'")))

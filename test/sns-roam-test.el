@@ -2983,11 +2983,12 @@ Each block loses the indentation of its opening fence."
     (sns-roam-test--register
      (expand-file-name "n.org" org-roam-directory)
      ":PROPERTIES:\n:ID: n-id\n:END:\n#+title: N\nBody.\n")
-    (dolist (query '("" "   "))
-      (sns-roam-test--should-have
-       (sns-roam-test--error-data 'sns-roam-empty-query
-                                  (lambda () (sns-roam-body-search query)))
-       :query query))))
+    (sns-roam-test--should-have
+     (sns-roam-test--error-data 'sns-roam-empty-query
+                                (lambda () (sns-roam-body-search "")))
+     :query "")
+    ;; A query of spaces still moves forward, so it stays searchable.
+    (should (listp (sns-roam-body-search "   ")))))
 
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here

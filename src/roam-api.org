@@ -298,8 +298,8 @@ four steps:
   gives no hits. Text up to and including the first =#+title:= line is
   not searched, so a search for a string like a UUID does not return
   every node.
-- *Errors*: =sns-roam-empty-query= with =:query= when QUERY is empty or
-  only whitespace, which would match at every position and never end.
+- *Errors*: =sns-roam-empty-query= with =:query= when QUERY is the
+  empty string, which would match at every position and never end.
 
 ** Implementation
 
@@ -366,7 +366,7 @@ match. Files without an =:ID:= property drawer (i.e. not a roam
 node) are skipped silently. Empty list on no match."
   ;; An empty regexp matches without moving point, so the search loop
   ;; in `sns-roam--search-file' would never end.
-  (when (string-blank-p query)
+  (when (string-empty-p query)
     (sns-roam--signal-empty-query query))
   (let ((files (directory-files-recursively
                 org-roam-directory "\\.org\\'")))
