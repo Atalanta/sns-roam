@@ -290,10 +290,13 @@ Result is root-to-leaf, including ROOT when it contains POINT.
 Each element appears once. Pure: no buffer state, no mutation."
   (when (sns-roam--element-contains-point-p root point)
     (cons root
-          (cl-loop for child in (org-ml-get-children root)
-                   for sub = (and (listp child)
-                                  (sns-roam--ancestry-at-point child point))
-                   when sub return sub))))
+          ;; Leaf nodes, such as inline code, have no children, and
+          ;; `org-ml-get-children' refuses them.
+          (when (org-ml-is-branch-node root)
+            (cl-loop for child in (org-ml-get-children root)
+                     for sub = (and (listp child)
+                                    (sns-roam--ancestry-at-point child point))
+                     when sub return sub)))))
 
 (defun sns-roam--headline-to-plist (h)
   "Convert headline AST node H into a plist for Claude."

@@ -2796,5 +2796,19 @@ Each block loses the indentation of its opening fence."
               (should (string-match-p "^\\+| ccc | d  |$" diff))))
         (sns-roam-test--kill-file-buffer file)))))
 
+(ert-deftest sns-roam-subtree-and-excerpt-read-a-point-in-inline-code ()
+  ;; A search hit inside ~kubectl~ lands in a leaf node, which has no
+  ;; children to walk.
+  (sns-roam-test--with-roam-dir
+    (let ((file (expand-file-name "deploy.org" org-roam-directory)))
+      (sns-roam-test--register
+       file ":PROPERTIES:\n:ID: deploy-id\n:END:\n#+title: Deploy\n* Deploy\nRun ~kubectl~.\n* Next\nOther.\n")
+      (let* ((text (sns-roam-test--file-text file))
+             (point (+ 1 (string-match "kubectl" text))))
+        (should (equal "* Deploy\nRun ~kubectl~.\n"
+                       (plist-get (sns-roam-subtree "deploy-id" point) :text)))
+        (should (string-match-p "kubectl"
+                                (plist-get (sns-roam-excerpt "deploy-id" point) :text)))))))
+
 (provide 'sns-roam-test)
 ;;; sns-roam-test.el ends here
